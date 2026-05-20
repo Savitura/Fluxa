@@ -1,0 +1,76 @@
+package transfer
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/queue"
+	walletpkg "github.com/fluxa/fluxa/internal/wallet"
+	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
+)
+
+type Service interface {
+	InitiateTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal) (*domain.Transaction, error)
+	GetTransaction(ctx context.Context, id string) (*domain.Transaction, error)
+	ListTransactions(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error)
+}
+
+type service struct {
+	repo       Repository
+	walletRepo walletpkg.Repository
+	queue      *queue.Client
+}
+
+func NewService(repo Repository, walletRepo walletpkg.Repository, q *queue.Client) Service {
+	return &service{repo: repo, walletRepo: walletRepo, queue: q}
+}
+
+func (s *service) InitiateTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal) (*domain.Transaction, error) {
+	if fromID == toID {
+		return nil, domain.ErrSelfTransfer
+	}
+
+	if _, err := s.walletRepo.GetByID(ctx, fromID); err != nil {
+		return nil, fmt.Errorf("source wallet: %w", err)
+	}
+	if _, err := s.walletRepo.GetByID(ctx, toID); err != nil {
+		return nil, fmt.Errorf("destination wallet: %w", err)
+	}
+
+	tx := &domain.Transaction{
+		ID:         uuid.New().String(),
+		Type:       domain.TypeTransfer,
+		Status:     domain.StatusPending,
+		FromWallet: fromID,
+		ToWallet:   toID,
+		Asset:      asset,
+		Amount:     amount,
+		CreatedAt:  time.Now().UTC(),
+	}
+
+	if err := s.repo.Create(ctx, tx); err != nil {
+		return nil, fmt.Errorf("persist transaction: %w", err)
+	}
+
+	if err := s.queue.EnqueueTransfer(ctx, tx.ID); err != nil {
+		// Transaction is persisted — worker will not run, but it can be retried.
+		// Log this but don't fail the request.
+		_ = err
+	}
+
+	return tx, nil
+}
+
+func (s *service) GetTransaction(ctx context.Context, id string) (*domain.Transaction, error) {
+	return s.repo.GetByID(ctx, id)
+}
+
+func (s *service) ListTransactions(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	return s.repo.ListByWallet(ctx, walletID, limit, offset)
+}

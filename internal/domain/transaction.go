@@ -1,0 +1,34 @@
+package domain
+
+import (
+	"time"
+
+	"github.com/shopspring/decimal"
+)
+
+type TransactionStatus string
+type TransactionType string
+
+const (
+	StatusPending   TransactionStatus = "pending"
+	StatusSubmitted TransactionStatus = "submitted"
+	StatusConfirmed TransactionStatus = "confirmed"
+	StatusFailed    TransactionStatus = "failed"
+
+	TypeTransfer   TransactionType = "transfer"
+	TypeConversion TransactionType = "conversion"
+	TypeFunding    TransactionType = "funding"
+)
+
+type Transaction struct {
+	ID         string
+	TxHash     string
+	Type       TransactionType
+	Status     TransactionStatus
+	FromWallet string
+	ToWallet   string
+	Asset      string
+	Amount     decimal.Decimal
+	Fee        decimal.Decimal
+	CreatedAt  time.Time
+}
