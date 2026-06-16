@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/config"
+	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/indexer"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
@@ -44,11 +45,16 @@ func main() {
 
 	walletRepo := postgres.NewWalletRepo(db)
 	txRepo := postgres.NewTransactionRepo(db)
+	feeRepo := postgres.NewFeeRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
 
-	engine := settlement.NewEngine(txRepo, walletRepo, stellarClient, signer, cfg.StellarNetwork)
+	feeSvc := fees.NewService(feeRepo)
+	engine := settlement.NewEngine(
+		txRepo, walletRepo, feeSvc, stellarClient, signer,
+		cfg.StellarNetwork, cfg.StellarUSDCIssuer, cfg.PlatformFeeWalletPublicKey,
+	)
 	settlementWorker := settlement.NewWorker(engine)
 
 	idx := indexer.New(walletRepo, txRepo, stellarClient)
@@ -70,7 +76,6 @@ func main() {
 	mux.HandleFunc(queue.TypeProcessTransfer, settlementWorker.HandleProcessTransfer)
 	mux.HandleFunc(queue.TypeSyncLedger, indexerWorker.HandleSyncLedger)
 
-	// Schedule periodic ledger sync every 30s
 	scheduler := asynq.NewScheduler(redisOpt, nil)
 	task := asynq.NewTask(queue.TypeSyncLedger, nil)
 	if _, err := scheduler.Register("@every 30s", task); err != nil {
@@ -98,6 +103,6 @@ func main() {
 	srv.Shutdown()
 	scheduler.Shutdown()
 
-	_ = transfer.NewService // silence unused import
+	_ = transfer.NewService
 	_ = wallet.NewService
 }

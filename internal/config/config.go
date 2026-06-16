@@ -17,6 +17,7 @@ type Config struct {
 	StellarUSDCIssuer string
 	MasterEncryptionKey []byte
 	TreasurySecretKey string
+	PlatformFeeWalletPublicKey string
 	MigrationsPath   string
 }
 
@@ -60,6 +61,7 @@ func Load() (*Config, error) {
 		StellarUSDCIssuer: viper.GetString("STELLAR_USDC_ISSUER"),
 		MasterEncryptionKey: keyBytes,
 		TreasurySecretKey: viper.GetString("TREASURY_SECRET_KEY"),
+		PlatformFeeWalletPublicKey: viper.GetString("PLATFORM_FEE_WALLET_PUBLIC_KEY"),
 		MigrationsPath:    viper.GetString("MIGRATIONS_PATH"),
 	}, nil
 }

@@ -11,4 +11,5 @@ var (
 	ErrSlippageExceeded    = errors.New("slippage tolerance exceeded")
 	ErrInvalidAsset        = errors.New("invalid or unsupported asset")
 	ErrSelfTransfer        = errors.New("source and destination wallets must differ")
+	ErrFeeScheduleNotFound = errors.New("fee schedule not found")
 )

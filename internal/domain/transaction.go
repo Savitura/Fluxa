@@ -30,5 +30,11 @@ type Transaction struct {
 	Asset      string
 	Amount     decimal.Decimal
 	Fee        decimal.Decimal
+	FeeBps     int
+	TenantID   *string
 	CreatedAt  time.Time
+}
+
+func (t *Transaction) NetAmount() decimal.Decimal {
+	return t.Amount.Sub(t.Fee)
 }

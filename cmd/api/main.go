@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/config"
+	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/indexer"
 	"github.com/fluxa/fluxa/internal/postgres"
@@ -41,7 +42,6 @@ func main() {
 
 	ctx := context.Background()
 
-	// Run migrations
 	if err := postgres.RunMigrations(cfg.DatabaseURL, cfg.MigrationsPath); err != nil {
 		log.Fatal().Err(err).Msg("run migrations")
 	}
@@ -50,48 +50,44 @@ func main() {
 		return
 	}
 
-	// Database
 	db, err := postgres.New(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("connect to database")
 	}
 	defer db.Close()
 
-	// Repositories
 	walletRepo := postgres.NewWalletRepo(db)
 	txRepo := postgres.NewTransactionRepo(db)
 	convRepo := postgres.NewConversionRepo(db)
+	feeRepo := postgres.NewFeeRepo(db)
 
-	// Stellar
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
 
-	// Queue
 	queueClient := queue.NewClient(cfg.RedisURL)
 	defer queueClient.Close()
 
-	// Services
+	feeSvc := fees.NewService(feeRepo)
 	walletSvc := wallet.NewService(walletRepo, stellarClient, cfg.MasterEncryptionKey)
-	transferSvc := transfer.NewService(txRepo, walletRepo, queueClient)
-	fxSvc := fx.NewService(walletRepo, convRepo, stellarClient, cfg.StellarUSDCIssuer)
+	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient)
+	fxSvc := fx.NewService(walletRepo, convRepo, feeSvc, stellarClient, cfg.StellarUSDCIssuer)
 
-	// Settlement engine (used by worker — wired here so it shares the DB pool)
-	engine := settlement.NewEngine(txRepo, walletRepo, stellarClient, signer, cfg.StellarNetwork)
+	engine := settlement.NewEngine(
+		txRepo, walletRepo, feeSvc, stellarClient, signer,
+		cfg.StellarNetwork, cfg.StellarUSDCIssuer, cfg.PlatformFeeWalletPublicKey,
+	)
 	_ = engine
 
-	// Indexer
 	idx := indexer.New(walletRepo, txRepo, stellarClient)
 	_ = idx
 
-	// Handlers
 	walletHandler := wallet.NewHandler(walletSvc)
 	transferHandler := transfer.NewHandler(transferSvc)
 	fxHandler := fx.NewHandler(fxSvc)
+	feeHandler := fees.NewHandler(feeSvc)
 
-	// Server
-	srv := server.New(walletHandler, transferHandler, fxHandler, cfg.Port)
+	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, cfg.Port)
 
-	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 

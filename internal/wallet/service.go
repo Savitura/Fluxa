@@ -72,7 +72,7 @@ func (s *service) GetBalances(ctx context.Context, walletID string) ([]Balance, 
 	acct, err := s.stellar.LoadAccount(w.PublicKey)
 	if err != nil {
 		hErr, ok := err.(*horizonclient.Error)
-		if ok && hErr.Response.Status == 404 {
+		if ok && hErr.Response.Status == "404" {
 			// Account not yet funded on Stellar — return empty balances
 			return []Balance{}, nil
 		}
