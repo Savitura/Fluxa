@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/wallet"
@@ -22,12 +23,14 @@ func New(
 	walletHandler *wallet.Handler,
 	transferHandler *transfer.Handler,
 	fxHandler *fx.Handler,
+	feeHandler *fees.Handler,
 	port string,
 ) *Server {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RealIP)
 	r.Use(requestID)
+	r.Use(tenantScope)
 	r.Use(logger)
 	r.Use(recoverer)
 
@@ -41,6 +44,8 @@ func New(
 		r.Route("/transfers", transferHandler.Routes())
 		r.Route("/transactions", transferHandler.TransactionRoutes())
 		r.Route("/fx", fxHandler.Routes())
+		r.Route("/fees", feeHandler.Routes())
+		r.Route("/admin/fees", feeHandler.AdminRoutes())
 	})
 
 	srv := &http.Server{

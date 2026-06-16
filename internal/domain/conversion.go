@@ -13,6 +13,8 @@ type Conversion struct {
 	DestAsset    string
 	SourceAmount decimal.Decimal
 	DestAmount   decimal.Decimal
+	FeeAmount    decimal.Decimal
+	FeeBps       int
 	Rate         decimal.Decimal
 	TxHash       string
 	CreatedAt    time.Time

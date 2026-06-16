@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/stellar"
+	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -17,6 +19,9 @@ type Quote struct {
 	DestAsset    string          `json:"dest_asset"`
 	SourceAmount decimal.Decimal `json:"source_amount"`
 	DestAmount   decimal.Decimal `json:"dest_amount"`
+	FeeAmount    decimal.Decimal `json:"fee_amount"`
+	NetAmount    decimal.Decimal `json:"net_amount"`
+	FeeBps       int             `json:"fee_bps"`
 	Rate         decimal.Decimal `json:"rate"`
 	ExpiresAt    time.Time       `json:"expires_at"`
 }
@@ -33,14 +38,16 @@ type Service interface {
 type service struct {
 	walletRepo     wallet.Repository
 	conversionRepo ConversionRepo
+	feeSvc         fees.Service
 	stellar        stellar.Client
 	usdcIssuer     string
 }
 
-func NewService(walletRepo wallet.Repository, convRepo ConversionRepo, stellarClient stellar.Client, usdcIssuer string) Service {
+func NewService(walletRepo wallet.Repository, convRepo ConversionRepo, feeSvc fees.Service, stellarClient stellar.Client, usdcIssuer string) Service {
 	return &service{
 		walletRepo:     walletRepo,
 		conversionRepo: convRepo,
+		feeSvc:         feeSvc,
 		stellar:        stellarClient,
 		usdcIssuer:     usdcIssuer,
 	}
@@ -69,11 +76,20 @@ func (s *service) GetQuote(ctx context.Context, sourceAsset, destAsset, amount s
 		rate = dstAmt.Div(srcAmt)
 	}
 
+	tenantID := tenant.IDFromContext(ctx)
+	feeResult, err := s.feeSvc.CalculateConversionFee(ctx, tenantID, sourceAsset, srcAmt)
+	if err != nil {
+		return nil, fmt.Errorf("calculate conversion fee: %w", err)
+	}
+
 	return &Quote{
 		SourceAsset:  sourceAsset,
 		DestAsset:    destAsset,
 		SourceAmount: srcAmt,
 		DestAmount:   dstAmt,
+		FeeAmount:    feeResult.FeeAmount,
+		NetAmount:    feeResult.NetAmount,
+		FeeBps:       feeResult.FeeBps,
 		Rate:         rate,
 		ExpiresAt:    time.Now().UTC().Add(30 * time.Second),
 	}, nil
@@ -95,6 +111,8 @@ func (s *service) ExecuteConversion(ctx context.Context, walletID string, quote 
 		DestAsset:    quote.DestAsset,
 		SourceAmount: quote.SourceAmount,
 		DestAmount:   quote.DestAmount,
+		FeeAmount:    quote.FeeAmount,
+		FeeBps:       quote.FeeBps,
 		Rate:         quote.Rate,
 		CreatedAt:    time.Now().UTC(),
 	}

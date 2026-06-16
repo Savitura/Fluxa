@@ -19,10 +19,11 @@ func NewConversionRepo(db *pgxpool.Pool) *ConversionRepo {
 
 func (r *ConversionRepo) Create(ctx context.Context, c *domain.Conversion) error {
 	_, err := r.db.Exec(ctx,
-		`INSERT INTO conversions (id, wallet_id, source_asset, dest_asset, source_amount, dest_amount, rate, tx_hash, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		`INSERT INTO conversions (id, wallet_id, source_asset, dest_asset, source_amount, dest_amount, fee_amount, fee_bps, rate, tx_hash, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		c.ID, c.WalletID, c.SourceAsset, c.DestAsset,
-		c.SourceAmount.String(), c.DestAmount.String(), c.Rate.String(),
+		c.SourceAmount.String(), c.DestAmount.String(), c.FeeAmount.String(),
+		nullableFeeBps(c.FeeBps), c.Rate.String(),
 		nullableString(c.TxHash), c.CreatedAt,
 	)
 	if err != nil {
@@ -33,7 +34,8 @@ func (r *ConversionRepo) Create(ctx context.Context, c *domain.Conversion) error
 
 func (r *ConversionRepo) ListByWallet(ctx context.Context, walletID string, limit, offset int) ([]*domain.Conversion, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT id, wallet_id, source_asset, dest_asset, source_amount, dest_amount, rate, COALESCE(tx_hash,''), created_at
+		`SELECT id, wallet_id, source_asset, dest_asset, source_amount, dest_amount,
+		        COALESCE(fee_amount, '0'), fee_bps, rate, COALESCE(tx_hash,''), created_at
 		 FROM conversions
 		 WHERE wallet_id = $1
 		 ORDER BY created_at DESC
@@ -48,13 +50,18 @@ func (r *ConversionRepo) ListByWallet(ctx context.Context, walletID string, limi
 	var conversions []*domain.Conversion
 	for rows.Next() {
 		c := &domain.Conversion{}
-		var src, dst, rate string
+		var src, dst, fee, rate string
+		var feeBps *int
 		if err := rows.Scan(&c.ID, &c.WalletID, &c.SourceAsset, &c.DestAsset,
-			&src, &dst, &rate, &c.TxHash, &c.CreatedAt); err != nil {
+			&src, &dst, &fee, &feeBps, &rate, &c.TxHash, &c.CreatedAt); err != nil {
 			return nil, err
 		}
 		c.SourceAmount, _ = decimal.NewFromString(src)
 		c.DestAmount, _ = decimal.NewFromString(dst)
+		c.FeeAmount, _ = decimal.NewFromString(fee)
+		if feeBps != nil {
+			c.FeeBps = *feeBps
+		}
 		c.Rate, _ = decimal.NewFromString(rate)
 		conversions = append(conversions, c)
 	}

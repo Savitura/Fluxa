@@ -8,35 +8,45 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/wallet"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/shopspring/decimal"
 	stellarnet "github.com/stellar/go/network"
 	"github.com/stellar/go/txnbuild"
 )
 
 type Engine struct {
-	txRepo     transfer.Repository
-	walletRepo wallet.Repository
-	stellar    stellar.Client
-	signer     stellar.Signer
-	network    string
+	txRepo       transfer.Repository
+	walletRepo   wallet.Repository
+	feeSvc       fees.Service
+	stellar      stellar.Client
+	signer       stellar.Signer
+	network      string
+	usdcIssuer   string
+	feeWallet    string
 }
 
 func NewEngine(
 	txRepo transfer.Repository,
 	walletRepo wallet.Repository,
+	feeSvc fees.Service,
 	stellarClient stellar.Client,
 	signer stellar.Signer,
-	network string,
+	network, usdcIssuer, feeWallet string,
 ) *Engine {
 	return &Engine{
 		txRepo:     txRepo,
 		walletRepo: walletRepo,
+		feeSvc:     feeSvc,
 		stellar:    stellarClient,
 		signer:     signer,
 		network:    network,
+		usdcIssuer: usdcIssuer,
+		feeWallet:  feeWallet,
 	}
 }
 
@@ -66,23 +76,33 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 		return fmt.Errorf("load destination wallet: %w", err)
 	}
 
-	asset := txnbuild.NativeAsset{}
-	var txAsset txnbuild.Asset = asset
-	if tx.Asset != "XLM" {
-		txAsset = txnbuild.CreditAsset{Code: tx.Asset}
+	txAsset := e.buildAsset(tx.Asset)
+	netAmount := tx.NetAmount()
+
+	ops := []txnbuild.Operation{
+		&txnbuild.Payment{
+			Destination: dstWallet.PublicKey,
+			Asset:       txAsset,
+			Amount:      netAmount.StringFixed(7),
+		},
+	}
+
+	if tx.Fee.GreaterThan(decimal.Zero) {
+		if e.feeWallet == "" {
+			return fmt.Errorf("PLATFORM_FEE_WALLET_PUBLIC_KEY is required to collect fees")
+		}
+		ops = append(ops, &txnbuild.Payment{
+			Destination: e.feeWallet,
+			Asset:       txAsset,
+			Amount:      tx.Fee.StringFixed(7),
+		})
 	}
 
 	stellarTx, err := txnbuild.NewTransaction(txnbuild.TransactionParams{
 		SourceAccount:        &srcAccount,
 		IncrementSequenceNum: true,
-		Operations: []txnbuild.Operation{
-			&txnbuild.Payment{
-				Destination: dstWallet.PublicKey,
-				Asset:       txAsset,
-				Amount:      tx.Amount.StringFixed(7),
-			},
-		},
-		BaseFee:    txnbuild.MinBaseFee,
+		Operations:           ops,
+		BaseFee:              txnbuild.MinBaseFee * int64(len(ops)),
 		Preconditions: txnbuild.Preconditions{
 			TimeBounds: txnbuild.NewTimeout(30),
 		},
@@ -108,11 +128,37 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 		return fmt.Errorf("submit to stellar: %w", submitErr)
 	}
 
-	if err := e.txRepo.UpdateStatus(ctx, txID, domain.StatusConfirmed, resp.Hash); err != nil {
-		log.Error().Err(err).Str("tx_id", txID).Str("tx_hash", resp.Hash).Msg("failed to update confirmed status")
+	if err := e.txRepo.UpdateStatus(ctx, txID, domain.StatusConfirmed, resp.GetHash()); err != nil {
+		log.Error().Err(err).Str("tx_id", txID).Str("tx_hash", resp.GetHash()).Msg("failed to update confirmed status")
+	}
+
+	if tx.Fee.GreaterThan(decimal.Zero) {
+		collection := &domain.FeeCollection{
+			ID:            uuid.New().String(),
+			TransactionID: txID,
+			TenantID:      tx.TenantID,
+			FeeAmount:     tx.Fee,
+			Asset:         tx.Asset,
+			FeeBps:        tx.FeeBps,
+			CollectedAt:   time.Now().UTC(),
+		}
+		if err := e.feeSvc.RecordCollection(ctx, collection); err != nil {
+			log.Error().Err(err).Str("tx_id", txID).Msg("failed to record fee collection")
+		}
 	}
 
 	return nil
+}
+
+func (e *Engine) buildAsset(code string) txnbuild.Asset {
+	if code == "XLM" {
+		return txnbuild.NativeAsset{}
+	}
+	issuer := ""
+	if code == "USDC" {
+		issuer = e.usdcIssuer
+	}
+	return txnbuild.CreditAsset{Code: code, Issuer: issuer}
 }
 
 func (e *Engine) networkPassphrase() string {
@@ -150,7 +196,6 @@ func isRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Horizon 429 (rate limit) and 503 (service unavailable) are retryable
 	errStr := err.Error()
 	return contains(errStr, "429") || contains(errStr, "503") || contains(errStr, "timeout")
 }

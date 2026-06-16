@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -46,6 +47,15 @@ func recoverer(next http.Handler) http.Handler {
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 			}
 		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func tenantScope(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
+			r = r.WithContext(tenant.WithID(r.Context(), tenantID))
+		}
 		next.ServeHTTP(w, r)
 	})
 }

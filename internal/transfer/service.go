@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/fluxa/fluxa/internal/tenant"
 	walletpkg "github.com/fluxa/fluxa/internal/wallet"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -21,11 +23,12 @@ type Service interface {
 type service struct {
 	repo       Repository
 	walletRepo walletpkg.Repository
+	feeSvc     fees.Service
 	queue      *queue.Client
 }
 
-func NewService(repo Repository, walletRepo walletpkg.Repository, q *queue.Client) Service {
-	return &service{repo: repo, walletRepo: walletRepo, queue: q}
+func NewService(repo Repository, walletRepo walletpkg.Repository, feeSvc fees.Service, q *queue.Client) Service {
+	return &service{repo: repo, walletRepo: walletRepo, feeSvc: feeSvc, queue: q}
 }
 
 func (s *service) InitiateTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal) (*domain.Transaction, error) {
@@ -40,6 +43,17 @@ func (s *service) InitiateTransfer(ctx context.Context, fromID, toID, asset stri
 		return nil, fmt.Errorf("destination wallet: %w", err)
 	}
 
+	tenantID := tenant.IDFromContext(ctx)
+	var tenantPtr *string
+	if tenantID != "" {
+		tenantPtr = &tenantID
+	}
+
+	feeResult, err := s.feeSvc.CalculateTransferFee(ctx, tenantID, asset, amount)
+	if err != nil {
+		return nil, fmt.Errorf("calculate transfer fee: %w", err)
+	}
+
 	tx := &domain.Transaction{
 		ID:         uuid.New().String(),
 		Type:       domain.TypeTransfer,
@@ -48,6 +62,9 @@ func (s *service) InitiateTransfer(ctx context.Context, fromID, toID, asset stri
 		ToWallet:   toID,
 		Asset:      asset,
 		Amount:     amount,
+		Fee:        feeResult.FeeAmount,
+		FeeBps:     feeResult.FeeBps,
+		TenantID:   tenantPtr,
 		CreatedAt:  time.Now().UTC(),
 	}
 

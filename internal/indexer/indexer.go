@@ -49,7 +49,7 @@ func (idx *Indexer) SyncWallet(ctx context.Context, w *domain.Wallet) error {
 	acct, err := idx.stellar.LoadAccount(w.PublicKey)
 	if err != nil {
 		hErr, ok := err.(*horizonclient.Error)
-		if ok && hErr.Response.Status == 404 {
+		if ok && hErr.Response.Status == "404" {
 			return nil // account not yet funded — nothing to sync
 		}
 		return fmt.Errorf("load account: %w", err)

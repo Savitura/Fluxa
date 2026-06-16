@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/api"
+	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/go-chi/chi/v5"
 	"github.com/shopspring/decimal"
 )
@@ -38,6 +40,38 @@ type createTransferRequest struct {
 	Amount       string `json:"amount"         validate:"required"`
 }
 
+type transferResponse struct {
+	ID         string `json:"id"`
+	TxHash     string `json:"tx_hash,omitempty"`
+	Type       string `json:"type"`
+	Status     string `json:"status"`
+	FromWallet string `json:"from_wallet_id"`
+	ToWallet   string `json:"to_wallet_id"`
+	Asset      string `json:"asset"`
+	Amount     string `json:"amount"`
+	FeeAmount  string `json:"fee_amount"`
+	NetAmount  string `json:"net_amount"`
+	FeeBps     int    `json:"fee_bps"`
+	CreatedAt  string `json:"created_at"`
+}
+
+func toTransferResponse(tx *domain.Transaction) transferResponse {
+	return transferResponse{
+		ID:         tx.ID,
+		TxHash:     tx.TxHash,
+		Type:       string(tx.Type),
+		Status:     string(tx.Status),
+		FromWallet: tx.FromWallet,
+		ToWallet:   tx.ToWallet,
+		Asset:      tx.Asset,
+		Amount:     tx.Amount.StringFixed(7),
+		FeeAmount:  tx.Fee.StringFixed(7),
+		NetAmount:  tx.NetAmount().StringFixed(7),
+		FeeBps:     tx.FeeBps,
+		CreatedAt:  tx.CreatedAt.Format(time.RFC3339),
+	}
+}
+
 func (h *Handler) initiateTransfer(w http.ResponseWriter, r *http.Request) {
 	var req createTransferRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -61,7 +95,7 @@ func (h *Handler) initiateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	api.JSON(w, http.StatusAccepted, tx)
+	api.JSON(w, http.StatusAccepted, toTransferResponse(tx))
 }
 
 func (h *Handler) getTransaction(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +105,7 @@ func (h *Handler) getTransaction(w http.ResponseWriter, r *http.Request) {
 		api.HandleDomainError(w, err)
 		return
 	}
-	api.JSON(w, http.StatusOK, tx)
+	api.JSON(w, http.StatusOK, toTransferResponse(tx))
 }
 
 func (h *Handler) listTransactions(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +124,12 @@ func (h *Handler) listTransactions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	responses := make([]transferResponse, len(txs))
+	for i, tx := range txs {
+		responses[i] = toTransferResponse(tx)
+	}
+
 	api.JSON(w, http.StatusOK, map[string]interface{}{
-		"transactions": txs,
+		"transactions": responses,
 	})
 }
