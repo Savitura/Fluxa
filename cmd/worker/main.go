@@ -7,11 +7,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/alerting"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/indexer"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/transfer"
@@ -60,8 +62,13 @@ func main() {
 	idx := indexer.New(walletRepo, txRepo, stellarClient)
 	indexerWorker := indexer.NewWorker(idx)
 
+	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-worker")
+	qClient := queue.NewClient(cfg.RedisURL)
+
+	reconcileSvc := reconcile.NewService(txRepo, stellarClient, alertClient, qClient, "fluxa-worker")
+	reconcileWorker := reconcile.NewWorker(reconcileSvc)
+
 	redisOpt, _ := asynq.ParseRedisURI(cfg.RedisURL)
-	_ = queue.NewClient(cfg.RedisURL)
 
 	srv := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency: 10,
@@ -75,11 +82,16 @@ func main() {
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(queue.TypeProcessTransfer, settlementWorker.HandleProcessTransfer)
 	mux.HandleFunc(queue.TypeSyncLedger, indexerWorker.HandleSyncLedger)
+	mux.HandleFunc(queue.TypeReconcile, reconcileWorker.HandleReconcile)
 
 	scheduler := asynq.NewScheduler(redisOpt, nil)
-	task := asynq.NewTask(queue.TypeSyncLedger, nil)
-	if _, err := scheduler.Register("@every 30s", task); err != nil {
+	syncTask := asynq.NewTask(queue.TypeSyncLedger, nil)
+	if _, err := scheduler.Register("@every 30s", syncTask); err != nil {
 		log.Fatal().Err(err).Msg("register ledger sync scheduler")
+	}
+	reconcileTask := asynq.NewTask(queue.TypeReconcile, nil)
+	if _, err := scheduler.Register("@every 5m", reconcileTask); err != nil {
+		log.Fatal().Err(err).Msg("register reconcile scheduler")
 	}
 
 	quit := make(chan os.Signal, 1)

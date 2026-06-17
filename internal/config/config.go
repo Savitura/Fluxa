@@ -19,6 +19,7 @@ type Config struct {
 	TreasurySecretKey string
 	PlatformFeeWalletPublicKey string
 	MigrationsPath   string
+	AlertWebhookURL  string
 }
 
 func Load() (*Config, error) {
@@ -63,5 +64,6 @@ func Load() (*Config, error) {
 		TreasurySecretKey: viper.GetString("TREASURY_SECRET_KEY"),
 		PlatformFeeWalletPublicKey: viper.GetString("PLATFORM_FEE_WALLET_PUBLIC_KEY"),
 		MigrationsPath:    viper.GetString("MIGRATIONS_PATH"),
+		AlertWebhookURL:   viper.GetString("ALERT_WEBHOOK_URL"),
 	}, nil
 }

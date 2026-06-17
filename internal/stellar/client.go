@@ -14,6 +14,8 @@ type Client interface {
 	LoadAccount(accountID string) (horizon.Account, error)
 	SubmitTransaction(tx *txnbuild.Transaction) (horizon.Transaction, error)
 	FindPathsStrict(sourceAccount, destAsset, destIssuer, destAmount string) ([]horizon.Path, error)
+	TransactionDetail(hash string) (horizon.Transaction, error)
+	OperationsForTransaction(hash string) ([]horizon.Operation, error)
 }
 
 type horizonClient struct {
@@ -42,6 +44,22 @@ func (c *horizonClient) SubmitTransaction(tx *txnbuild.Transaction) (horizon.Tra
 		return horizon.Transaction{}, fmt.Errorf("submit transaction: %w", err)
 	}
 	return resp, nil
+}
+
+func (c *horizonClient) TransactionDetail(hash string) (horizon.Transaction, error) {
+	tx, err := c.inner.TransactionDetail(horizonclient.TransactionRequest{TransactionHash: hash})
+	if err != nil {
+		return horizon.Transaction{}, fmt.Errorf("transaction detail: %w", err)
+	}
+	return tx, nil
+}
+
+func (c *horizonClient) OperationsForTransaction(hash string) ([]horizon.Operation, error) {
+	page, err := c.inner.Operations(horizonclient.OperationsRequest{ForTransaction: hash})
+	if err != nil {
+		return nil, fmt.Errorf("operations for transaction: %w", err)
+	}
+	return page.Embedded.Records, nil
 }
 
 func (c *horizonClient) FindPathsStrict(sourceAccount, destAsset, destIssuer, destAmount string) ([]horizon.Path, error) {

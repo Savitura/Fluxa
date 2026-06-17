@@ -4,6 +4,7 @@ const (
 	TypeProcessTransfer = "transfer:process"
 	TypeConfirmTx       = "transfer:confirm"
 	TypeSyncLedger      = "indexer:sync"
+	TypeReconcile       = "reconcile:run"
 )
 
 type ProcessTransferPayload struct {

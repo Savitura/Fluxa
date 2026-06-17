@@ -8,12 +8,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/alerting"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/indexer"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/server"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
@@ -81,12 +83,16 @@ func main() {
 	idx := indexer.New(walletRepo, txRepo, stellarClient)
 	_ = idx
 
+	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-api")
+	reconcileSvc := reconcile.NewService(txRepo, stellarClient, alertClient, queueClient, "fluxa-api")
+	reconcileHandler := reconcile.NewHandler(reconcileSvc)
+
 	walletHandler := wallet.NewHandler(walletSvc)
 	transferHandler := transfer.NewHandler(transferSvc)
 	fxHandler := fx.NewHandler(fxSvc)
 	feeHandler := fees.NewHandler(feeSvc)
 
-	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, cfg.Port)
+	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, reconcileHandler, cfg.Port)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
