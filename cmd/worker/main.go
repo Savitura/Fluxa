@@ -18,6 +18,7 @@ import (
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/wallet"
+	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -48,6 +49,7 @@ func main() {
 	walletRepo := postgres.NewWalletRepo(db)
 	txRepo := postgres.NewTransactionRepo(db)
 	feeRepo := postgres.NewFeeRepo(db)
+	webhookRepo := postgres.NewWebhookRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -68,6 +70,9 @@ func main() {
 	reconcileSvc := reconcile.NewService(txRepo, stellarClient, alertClient, qClient, "fluxa-worker")
 	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 
+	webhookSvc := webhook.NewService(webhookRepo, qClient)
+	webhookWorker := webhook.NewWorker(webhookSvc)
+
 	redisOpt, _ := asynq.ParseRedisURI(cfg.RedisURL)
 
 	srv := asynq.NewServer(redisOpt, asynq.Config{
@@ -83,6 +88,7 @@ func main() {
 	mux.HandleFunc(queue.TypeProcessTransfer, settlementWorker.HandleProcessTransfer)
 	mux.HandleFunc(queue.TypeSyncLedger, indexerWorker.HandleSyncLedger)
 	mux.HandleFunc(queue.TypeReconcile, reconcileWorker.HandleReconcile)
+	mux.HandleFunc(queue.TypeWebhookDeliver, webhookWorker.HandleDeliver)
 
 	scheduler := asynq.NewScheduler(redisOpt, nil)
 	syncTask := asynq.NewTask(queue.TypeSyncLedger, nil)
