@@ -8,6 +8,7 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/reconcile"
+	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
@@ -22,6 +23,10 @@ func NewTransactionRepo(db *pgxpool.Pool) *TransactionRepo {
 }
 
 func (r *TransactionRepo) Create(ctx context.Context, tx *domain.Transaction) error {
+	tID := tenant.IDFromContext(ctx)
+	if tID != "" {
+		tx.TenantID = &tID
+	}
 	_, err := r.db.Exec(ctx,
 		`INSERT INTO transactions (id, tx_hash, type, status, from_wallet, to_wallet, asset, amount, fee, fee_bps, tenant_id, created_at, requeue_count, reconciled_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
@@ -42,14 +47,20 @@ func (r *TransactionRepo) GetByID(ctx context.Context, id string) (*domain.Trans
 	var amount, fee string
 	var feeBps *int
 	var tenantID *string
-	err := r.db.QueryRow(ctx,
-		`SELECT id, COALESCE(tx_hash,''), type, status,
+	
+	tID := tenant.IDFromContext(ctx)
+	query := `SELECT id, COALESCE(tx_hash,''), type, status,
 		        COALESCE(from_wallet::text,''), COALESCE(to_wallet::text,''),
 		        asset, amount, COALESCE(fee,'0'), fee_bps, tenant_id, created_at,
 		        COALESCE(requeue_count, 0), reconciled_at
-		 FROM transactions WHERE id = $1`,
-		id,
-	).Scan(&tx.ID, &tx.TxHash, &tx.Type, &tx.Status,
+		 FROM transactions WHERE id = $1`
+	args := []interface{}{id}
+	if tID != "" {
+		query += ` AND tenant_id = $2`
+		args = append(args, tID)
+	}
+
+	err := r.db.QueryRow(ctx, query, args...).Scan(&tx.ID, &tx.TxHash, &tx.Type, &tx.Status,
 		&tx.FromWallet, &tx.ToWallet,
 		&tx.Asset, &amount, &fee, &feeBps, &tenantID, &tx.CreatedAt,
 		&tx.RequeueCount, &tx.ReconciledAt)
@@ -69,13 +80,18 @@ func (r *TransactionRepo) GetByID(ctx context.Context, id string) (*domain.Trans
 }
 
 func (r *TransactionRepo) UpdateStatus(ctx context.Context, id string, status domain.TransactionStatus, txHash string) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE transactions
+	tID := tenant.IDFromContext(ctx)
+	query := `UPDATE transactions
 		 SET status = $2, tx_hash = NULLIF($3, '')
 		 WHERE id = $1
-		   AND status != 'confirmed'`,
-		id, status, txHash,
-	)
+		   AND status != 'confirmed'`
+	args := []interface{}{id, status, txHash}
+	if tID != "" {
+		query += ` AND tenant_id = $4`
+		args = append(args, tID)
+	}
+
+	_, err := r.db.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update transaction status: %w", err)
 	}
@@ -83,17 +99,25 @@ func (r *TransactionRepo) UpdateStatus(ctx context.Context, id string, status do
 }
 
 func (r *TransactionRepo) ListByWallet(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT id, COALESCE(tx_hash,''), type, status,
+	tID := tenant.IDFromContext(ctx)
+	
+	query := `SELECT id, COALESCE(tx_hash,''), type, status,
 		        COALESCE(from_wallet::text,''), COALESCE(to_wallet::text,''),
 		        asset, amount, COALESCE(fee,'0'), fee_bps, tenant_id, created_at,
 		        COALESCE(requeue_count, 0), reconciled_at
 		 FROM transactions
-		 WHERE from_wallet = $1 OR to_wallet = $1
-		 ORDER BY created_at DESC
-		 LIMIT $2 OFFSET $3`,
-		walletID, limit, offset,
-	)
+		 WHERE (from_wallet = $1 OR to_wallet = $1)`
+	args := []interface{}{walletID}
+	
+	if tID != "" {
+		query += ` AND tenant_id = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4`
+		args = append(args, tID, limit, offset)
+	} else {
+		query += ` ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+		args = append(args, limit, offset)
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list transactions: %w", err)
 	}
