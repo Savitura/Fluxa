@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/apikey"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fx"
+	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/wallet"
@@ -26,13 +28,14 @@ func New(
 	fxHandler *fx.Handler,
 	feeHandler *fees.Handler,
 	reconcileHandler *reconcile.Handler,
+	apikeyHandler *apikey.Handler,
+	apiKeyRepo *postgres.APIKeyRepo,
 	port string,
 ) *Server {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RealIP)
 	r.Use(requestID)
-	r.Use(tenantScope)
 	r.Use(logger)
 	r.Use(recoverer)
 
@@ -42,6 +45,8 @@ func New(
 	})
 
 	r.Route("/v1", func(r chi.Router) {
+		r.Use(AuthMiddleware(apiKeyRepo))
+		r.Route("/keys", apikeyHandler.Routes())
 		r.Route("/wallets", walletHandler.Routes())
 		r.Route("/transfers", transferHandler.Routes())
 		r.Route("/transactions", transferHandler.TransactionRoutes())

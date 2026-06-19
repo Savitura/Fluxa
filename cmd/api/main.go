@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/alerting"
+	"github.com/fluxa/fluxa/internal/apikey"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fx"
@@ -62,6 +63,7 @@ func main() {
 	txRepo := postgres.NewTransactionRepo(db)
 	convRepo := postgres.NewConversionRepo(db)
 	feeRepo := postgres.NewFeeRepo(db)
+	apiKeyRepo := postgres.NewAPIKeyRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -91,8 +93,9 @@ func main() {
 	transferHandler := transfer.NewHandler(transferSvc)
 	fxHandler := fx.NewHandler(fxSvc)
 	feeHandler := fees.NewHandler(feeSvc)
+	apikeyHandler := apikey.NewHandler(apiKeyRepo)
 
-	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, reconcileHandler, cfg.Port)
+	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo, cfg.Port)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
