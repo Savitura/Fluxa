@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/apikey"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fx"
+	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/wallet"
@@ -29,6 +31,8 @@ func New(
 	fiatHandler *fiat.Handler,
 	feeHandler *fees.Handler,
 	reconcileHandler *reconcile.Handler,
+	apikeyHandler *apikey.Handler,
+	apiKeyRepo *postgres.APIKeyRepo,
 	webhookHandler *webhook.Handler,
 	port string,
 ) *Server {
@@ -36,7 +40,6 @@ func New(
 
 	r.Use(middleware.RealIP)
 	r.Use(requestID)
-	r.Use(tenantScope)
 	r.Use(logger)
 	r.Use(recoverer)
 
@@ -46,6 +49,8 @@ func New(
 	})
 
 	r.Route("/v1", func(r chi.Router) {
+		r.Use(AuthMiddleware(apiKeyRepo))
+		r.Route("/keys", apikeyHandler.Routes())
 		r.Route("/wallets", walletHandler.Routes())
 		r.Route("/wallets/{id}/deposit", fiatHandler.DepositRoutes())
 		r.Route("/wallets/{id}/withdraw", fiatHandler.WithdrawRoutes())

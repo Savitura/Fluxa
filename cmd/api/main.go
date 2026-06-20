@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/alerting"
+	"github.com/fluxa/fluxa/internal/apikey"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fx"
@@ -65,6 +66,7 @@ func main() {
 	txRepo := postgres.NewTransactionRepo(db)
 	convRepo := postgres.NewConversionRepo(db)
 	feeRepo := postgres.NewFeeRepo(db)
+	apiKeyRepo := postgres.NewAPIKeyRepo(db)
 	fiatRepo := postgres.NewFiatRepo(db)
 	webhookRepo := postgres.NewWebhookRepo(db)
 
@@ -101,6 +103,9 @@ func main() {
 	fxHandler := fx.NewHandler(fxSvc)
 	fiatHandler := fiat.NewHandler(fiatSvc)
 	feeHandler := fees.NewHandler(feeSvc)
+	apikeyHandler := apikey.NewHandler(apiKeyRepo)
+
+	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo, cfg.Port)
 	webhookHandler := webhook.NewHandler(webhookSvc)
 
 	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, reconcileHandler, webhookHandler, cfg.Port)
