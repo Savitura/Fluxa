@@ -18,8 +18,11 @@ type Config struct {
 	MasterEncryptionKey []byte
 	TreasurySecretKey string
 	PlatformFeeWalletPublicKey string
-	MigrationsPath   string
-	AlertWebhookURL  string
+	MigrationsPath             string
+	AlertWebhookURL            string
+	PlatformWalletID           string
+	FlutterwaveSecretKey       string
+	FlutterwaveWebhookHash     string
 }
 
 func Load() (*Config, error) {
@@ -63,7 +66,10 @@ func Load() (*Config, error) {
 		MasterEncryptionKey: keyBytes,
 		TreasurySecretKey: viper.GetString("TREASURY_SECRET_KEY"),
 		PlatformFeeWalletPublicKey: viper.GetString("PLATFORM_FEE_WALLET_PUBLIC_KEY"),
-		MigrationsPath:    viper.GetString("MIGRATIONS_PATH"),
-		AlertWebhookURL:   viper.GetString("ALERT_WEBHOOK_URL"),
+		MigrationsPath:             viper.GetString("MIGRATIONS_PATH"),
+		AlertWebhookURL:            viper.GetString("ALERT_WEBHOOK_URL"),
+		PlatformWalletID:           viper.GetString("PLATFORM_WALLET_ID"),
+		FlutterwaveSecretKey:       viper.GetString("FLUTTERWAVE_SECRET_KEY"),
+		FlutterwaveWebhookHash:     viper.GetString("FLUTTERWAVE_WEBHOOK_HASH"),
 	}, nil
 }
