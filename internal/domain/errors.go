@@ -13,4 +13,6 @@ var (
 	ErrSelfTransfer              = errors.New("source and destination wallets must differ")
 	ErrFeeScheduleNotFound       = errors.New("fee schedule not found")
 	ErrReconciliationFailed      = errors.New("reconciliation check failed")
+	ErrWebhookNotFound           = errors.New("webhook endpoint not found")
+	ErrWebhookDeliveryNotFound   = errors.New("webhook delivery not found")
 )

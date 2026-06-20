@@ -14,6 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 	horizonclient "github.com/stellar/go/clients/horizonclient"
 	"github.com/stellar/go/protocols/horizon"
+	"github.com/stellar/go/protocols/horizon/operations"
 )
 
 const (
@@ -132,7 +133,7 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 		}
 
 		s.writeAudit(ctx, tx, "unsuccessful", false, false, AuditNotFound,
-			fmt.Sprintf("transaction successful=false on Horizon (result: %s)", horizonTx.ResultXDR))
+			fmt.Sprintf("transaction successful=false on Horizon (result: %s)", horizonTx.ResultXdr))
 		s.alerting.Critical(ctx, "Reconciliation Failed: Unsuccessful Transaction",
 			fmt.Sprintf("Transaction %s (hash: %s) is marked confirmed in DB but Horizon reports it as unsuccessful.", tx.ID, hash))
 		return nil
@@ -168,32 +169,46 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 	return nil
 }
 
-func verifyOps(tx *domain.Transaction, ops []horizon.Operation) (amountVerified, assetVerified bool, details string) {
+func verifyOps(tx *domain.Transaction, ops []operations.Operation) (amountVerified, assetVerified bool, details string) {
 	for _, op := range ops {
-		if op.Type != "payment" && op.Type != "path_payment_strict_send" && op.Type != "path_payment_strict_receive" {
+		opType := op.GetType()
+		if opType != "payment" && opType != "path_payment_strict_send" && opType != "path_payment_strict_receive" {
 			continue
 		}
 
-		if op.Amount == "" {
+		var amount, assetType, assetCode string
+		switch p := op.(type) {
+		case operations.Payment:
+			amount = p.Amount
+			assetType = p.Asset.Type
+			assetCode = p.Asset.Code
+		case operations.PathPayment:
+			amount = p.Amount
+			assetType = p.Asset.Type
+			assetCode = p.Asset.Code
+		default:
 			continue
 		}
 
-		horizonAmount, err := decimal.NewFromString(op.Amount)
+		if amount == "" {
+			continue
+		}
+
+		horizonAmount, err := decimal.NewFromString(amount)
 		if err != nil {
 			continue
 		}
 
 		netAmount := tx.NetAmount()
-
 		if horizonAmount.Equal(netAmount) || horizonAmount.Equal(tx.Amount) {
 			amountVerified = true
 		}
 
 		expectedCode := tx.Asset
 		matched := false
-		if expectedCode == "XLM" && op.AssetType == "native" {
+		if expectedCode == "XLM" && assetType == "native" {
 			matched = true
-		} else if expectedCode != "" && op.AssetCode == expectedCode {
+		} else if expectedCode != "" && assetCode == expectedCode {
 			matched = true
 		}
 		if matched {

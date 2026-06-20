@@ -12,6 +12,7 @@ import (
 	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/wallet"
+	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -28,6 +29,7 @@ func New(
 	fiatHandler *fiat.Handler,
 	feeHandler *fees.Handler,
 	reconcileHandler *reconcile.Handler,
+	webhookHandler *webhook.Handler,
 	port string,
 ) *Server {
 	r := chi.NewRouter()
@@ -54,6 +56,7 @@ func New(
 		r.Route("/fees", feeHandler.Routes())
 		r.Route("/admin/fees", feeHandler.AdminRoutes())
 		r.Route("/admin", reconcileHandler.AdminRoutes())
+		r.Route("/webhooks", webhookHandler.Routes())
 	})
 
 	srv := &http.Server{

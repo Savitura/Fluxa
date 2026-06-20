@@ -5,22 +5,22 @@ import (
 
 	"github.com/stellar/go/clients/horizonclient"
 	"github.com/stellar/go/protocols/horizon"
+	"github.com/stellar/go/protocols/horizon/operations"
 	"github.com/stellar/go/txnbuild"
 )
 
 // Client is the interface Fluxa uses to interact with Stellar/Horizon.
-// Keeping it as an interface allows swapping in a mock for tests.
 type Client interface {
 	LoadAccount(accountID string) (horizon.Account, error)
 	SubmitTransaction(tx *txnbuild.Transaction) (horizon.Transaction, error)
 	FindPathsStrict(sourceAccount, destAsset, destIssuer, destAmount string) ([]horizon.Path, error)
 	TransactionDetail(hash string) (horizon.Transaction, error)
-	OperationsForTransaction(hash string) ([]horizon.Operation, error)
+	OperationsForTransaction(hash string) ([]operations.Operation, error)
 }
 
 type horizonClient struct {
-	inner    *horizonclient.Client
-	network  string
+	inner   *horizonclient.Client
+	network string
 }
 
 func NewClient(horizonURL, network string) Client {
@@ -47,15 +47,15 @@ func (c *horizonClient) SubmitTransaction(tx *txnbuild.Transaction) (horizon.Tra
 }
 
 func (c *horizonClient) TransactionDetail(hash string) (horizon.Transaction, error) {
-	tx, err := c.inner.TransactionDetail(horizonclient.TransactionRequest{TransactionHash: hash})
+	tx, err := c.inner.TransactionDetail(hash)
 	if err != nil {
 		return horizon.Transaction{}, fmt.Errorf("transaction detail: %w", err)
 	}
 	return tx, nil
 }
 
-func (c *horizonClient) OperationsForTransaction(hash string) ([]horizon.Operation, error) {
-	page, err := c.inner.Operations(horizonclient.OperationsRequest{ForTransaction: hash})
+func (c *horizonClient) OperationsForTransaction(hash string) ([]operations.Operation, error) {
+	page, err := c.inner.Operations(horizonclient.OperationRequest{ForTransaction: hash})
 	if err != nil {
 		return nil, fmt.Errorf("operations for transaction: %w", err)
 	}
@@ -64,11 +64,11 @@ func (c *horizonClient) OperationsForTransaction(hash string) ([]horizon.Operati
 
 func (c *horizonClient) FindPathsStrict(sourceAccount, destAsset, destIssuer, destAmount string) ([]horizon.Path, error) {
 	req := horizonclient.PathsRequest{
-		DestinationAccount: sourceAccount,
-		DestinationAssetType: horizonclient.AssetType4,
-		DestinationAssetCode: destAsset,
+		DestinationAccount:     sourceAccount,
+		DestinationAssetType:   horizonclient.AssetType4,
+		DestinationAssetCode:   destAsset,
 		DestinationAssetIssuer: destIssuer,
-		DestinationAmount:    destAmount,
+		DestinationAmount:      destAmount,
 	}
 	paths, err := c.inner.Paths(req)
 	if err != nil {
