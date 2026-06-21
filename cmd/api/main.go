@@ -8,17 +8,23 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/alerting"
+	"github.com/fluxa/fluxa/internal/apikey"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fx"
+	"github.com/fluxa/fluxa/internal/fiat"
+	"github.com/fluxa/fluxa/internal/fiat/flutterwave"
 	"github.com/fluxa/fluxa/internal/indexer"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/server"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/wallet"
+	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -60,6 +66,9 @@ func main() {
 	txRepo := postgres.NewTransactionRepo(db)
 	convRepo := postgres.NewConversionRepo(db)
 	feeRepo := postgres.NewFeeRepo(db)
+	apiKeyRepo := postgres.NewAPIKeyRepo(db)
+	fiatRepo := postgres.NewFiatRepo(db)
+	webhookRepo := postgres.NewWebhookRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -71,6 +80,10 @@ func main() {
 	walletSvc := wallet.NewService(walletRepo, stellarClient, cfg.MasterEncryptionKey)
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient)
 	fxSvc := fx.NewService(walletRepo, convRepo, feeSvc, stellarClient, cfg.StellarUSDCIssuer)
+	webhookSvc := webhook.NewService(webhookRepo, queueClient)
+
+	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
+	fiatSvc := fiat.NewService(fiatRepo, fwProvider, fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
 
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
@@ -81,12 +94,21 @@ func main() {
 	idx := indexer.New(walletRepo, txRepo, stellarClient)
 	_ = idx
 
+	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-api")
+	reconcileSvc := reconcile.NewService(txRepo, stellarClient, alertClient, queueClient, "fluxa-api")
+	reconcileHandler := reconcile.NewHandler(reconcileSvc)
+
 	walletHandler := wallet.NewHandler(walletSvc)
 	transferHandler := transfer.NewHandler(transferSvc)
 	fxHandler := fx.NewHandler(fxSvc)
+	fiatHandler := fiat.NewHandler(fiatSvc)
 	feeHandler := fees.NewHandler(feeSvc)
+	apikeyHandler := apikey.NewHandler(apiKeyRepo)
 
-	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, cfg.Port)
+	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo, cfg.Port)
+	webhookHandler := webhook.NewHandler(webhookSvc)
+
+	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, reconcileHandler, webhookHandler, cfg.Port)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
