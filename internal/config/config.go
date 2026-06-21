@@ -1,10 +1,11 @@
 package config
 
 import (
-	"encoding/hex"
-	"fmt"
+    "encoding/hex"
+    "fmt"
+    "strconv"
 
-	"github.com/spf13/viper"
+    "github.com/spf13/viper"
 )
 
 type Config struct {
@@ -26,34 +27,35 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
-	viper.AutomaticEnv()
+    viper.AutomaticEnv()
 
-	viper.SetDefault("PORT", "3000")
-	viper.SetDefault("ENV", "development")
-	viper.SetDefault("STELLAR_NETWORK", "testnet")
-	viper.SetDefault("STELLAR_HORIZON_URL", "https://horizon-testnet.stellar.org")
-	viper.SetDefault("MIGRATIONS_PATH", "db/migrations")
+    viper.SetDefault("PORT", "3000")
+    viper.SetDefault("ENV", "development")
+    viper.SetDefault("STELLAR_NETWORK", "testnet")
+    viper.SetDefault("STELLAR_HORIZON_URL", "https://horizon-testnet.stellar.org")
+    viper.SetDefault("MIGRATIONS_PATH", "db/migrations")
+    viper.SetDefault("FX_SPREAD_BPS", "50") // default 0.5%
 
-	// Load .env file if present (dev convenience)
-	viper.SetConfigFile(".env")
-	viper.SetConfigType("env")
-	_ = viper.ReadInConfig() // not required to exist
+    // Load .env file if present (dev convenience)
+    viper.SetConfigFile(".env")
+    viper.SetConfigType("env")
+    _ = viper.ReadInConfig() // ignore if not exist
 
-	required := []string{"DATABASE_URL", "REDIS_URL", "MASTER_ENCRYPTION_KEY"}
-	for _, key := range required {
-		if viper.GetString(key) == "" {
-			return nil, fmt.Errorf("required env var %s is not set", key)
-		}
-	}
+    required := []string{"DATABASE_URL", "REDIS_URL", "MASTER_ENCRYPTION_KEY"}
+    for _, key := range required {
+        if viper.GetString(key) == "" {
+            return nil, fmt.Errorf("required env var %s is not set", key)
+        }
+    }
 
-	keyHex := viper.GetString("MASTER_ENCRYPTION_KEY")
-	keyBytes, err := hex.DecodeString(keyHex)
-	if err != nil {
-		return nil, fmt.Errorf("MASTER_ENCRYPTION_KEY must be a valid hex string: %w", err)
-	}
-	if len(keyBytes) != 32 {
-		return nil, fmt.Errorf("MASTER_ENCRYPTION_KEY must be 32 bytes (64 hex chars), got %d bytes", len(keyBytes))
-	}
+    keyHex := viper.GetString("MASTER_ENCRYPTION_KEY")
+    keyBytes, err := hex.DecodeString(keyHex)
+    if err != nil {
+        return nil, fmt.Errorf("MASTER_ENCRYPTION_KEY must be a valid hex string: %w", err)
+    }
+    if len(keyBytes) != 32 {
+        return nil, fmt.Errorf("MASTER_ENCRYPTION_KEY must be 32 bytes (64 hex chars), got %d bytes", len(keyBytes))
+    }
 
 	return &Config{
 		Port:              viper.GetString("PORT"),
