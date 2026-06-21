@@ -20,12 +20,12 @@ func NewHandler(repo *postgres.APIKeyRepo) *Handler {
 	return &Handler{repo: repo}
 }
 
-func (h *Handler) Routes() chi.Router {
-	r := chi.NewRouter()
-	r.Post("/", h.Create)
-	r.Get("/", h.List)
-	r.Delete("/{id}", h.Revoke)
-	return r
+func (h *Handler) Routes() func(r chi.Router) {
+	return func(r chi.Router) {
+		r.Post("/", h.Create)
+		r.Get("/", h.List)
+		r.Delete("/{id}", h.Revoke)
+	}
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {

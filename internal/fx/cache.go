@@ -4,8 +4,6 @@ import (
     "context"
     "sync"
     "time"
-
-    "github.com/shopspring/decimal"
 )
 
 // Cache stores FX rate responses with TTL handling.

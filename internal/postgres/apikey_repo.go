@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"

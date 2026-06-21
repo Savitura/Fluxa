@@ -107,9 +107,3 @@ func (r *WalletRepo) List(ctx context.Context, limit, offset int) ([]*domain.Wal
 	return wallets, rows.Err()
 }
 
-func nullableUUID(id *string) interface{} {
-	if id == nil || *id == "" {
-		return nil
-	}
-	return *id
-}
