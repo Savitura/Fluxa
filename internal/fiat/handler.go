@@ -47,24 +47,24 @@ type depositReq struct {
 func (h *Handler) handleDeposit(w http.ResponseWriter, r *http.Request) {
 	walletID := chi.URLParam(r, "id")
 	if walletID == "" {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "wallet id is required")
+		api.BadRequest(w, "wallet id is required")
 		return
 	}
 
 	var req depositReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+		api.BadRequest(w, "invalid request body")
 		return
 	}
 
 	if err := api.Validate(req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		api.BadRequest(w, err.Error())
 		return
 	}
 
 	amount, err := decimal.NewFromString(req.Amount)
 	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid amount")
+		api.BadRequest(w, "invalid amount")
 		return
 	}
 
@@ -96,24 +96,24 @@ type withdrawReq struct {
 func (h *Handler) handleWithdrawal(w http.ResponseWriter, r *http.Request) {
 	walletID := chi.URLParam(r, "id")
 	if walletID == "" {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "wallet id is required")
+		api.BadRequest(w, "wallet id is required")
 		return
 	}
 
 	var req withdrawReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+		api.BadRequest(w, "invalid request body")
 		return
 	}
 
 	if err := api.Validate(req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		api.BadRequest(w, err.Error())
 		return
 	}
 
 	amount, err := decimal.NewFromString(req.Amount)
 	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid amount")
+		api.BadRequest(w, "invalid amount")
 		return
 	}
 
@@ -138,20 +138,22 @@ func (h *Handler) handleWithdrawal(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
 	if provider == "" {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "provider is required")
+		api.BadRequest(w, "provider is required")
 		return
 	}
 
 	payload, err := io.ReadAll(r.Body)
 	if err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "read payload error")
+		api.BadRequest(w, "read payload error")
 		return
 	}
 
+	// Flutterwave sends signature in "verif-hash" header
 	signature := r.Header.Get("verif-hash")
 
 	if err := h.svc.HandleWebhook(r.Context(), payload, signature); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		// Do not return 500 so provider won't keep retrying if it's a fatal validation error
+		api.BadRequest(w, err.Error())
 		return
 	}
 

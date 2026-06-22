@@ -62,7 +62,7 @@ func (s *service) InitiateDeposit(ctx context.Context, req DepositRequest) (*Dep
 		ProviderReference: req.Reference,
 		FiatAmount:        req.FiatAmount,
 		FiatCurrency:      req.FiatCurrency,
-		USDCAmount:        quote.DestAmount, // amount of USDC to credit user
+		USDCAmount:        quote.ToAmount, // amount of USDC to credit user
 		Status:            domain.FiatStatusPending,
 		CreatedAt:         time.Now().UTC(),
 	}

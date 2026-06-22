@@ -37,6 +37,10 @@ func NotFound(w http.ResponseWriter, message string) {
 	Error(w, http.StatusNotFound, "NOT_FOUND", message)
 }
 
+func UnprocessableEntity(w http.ResponseWriter, code, message string) {
+	Error(w, http.StatusUnprocessableEntity, code, message)
+}
+
 func InternalError(w http.ResponseWriter, err error) {
 	Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an unexpected error occurred")
 }
@@ -50,6 +54,10 @@ func HandleDomainError(w http.ResponseWriter, err error) {
 		errors.Is(err, domain.ErrInsufficientBalance), errors.Is(err, domain.ErrSlippageExceeded),
 		errors.Is(err, domain.ErrFeeScheduleNotFound):
 		BadRequest(w, err.Error())
+	case errors.Is(err, domain.ErrQuoteExpired):
+		UnprocessableEntity(w, "QUOTE_EXPIRED", err.Error())
+	case errors.Is(err, domain.ErrQuoteAlreadyUsed):
+		UnprocessableEntity(w, "QUOTE_ALREADY_USED", err.Error())
 	default:
 		InternalError(w, err)
 	}
