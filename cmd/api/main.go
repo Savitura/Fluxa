@@ -25,6 +25,7 @@ import (
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
@@ -63,6 +64,13 @@ func main() {
 	}
 	defer db.Close()
 
+	redisOpt, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("parse redis url")
+	}
+	redisClient := redis.NewClient(redisOpt)
+	defer redisClient.Close()
+
 	walletRepo := postgres.NewWalletRepo(db)
 	txRepo := postgres.NewTransactionRepo(db)
 	convRepo := postgres.NewConversionRepo(db)
@@ -71,6 +79,7 @@ func main() {
 	fiatRepo := postgres.NewFiatRepo(db)
 	webhookRepo := postgres.NewWebhookRepo(db)
 	reconcileRepo := postgres.NewReconcileRepo(db)
+	fxQuoteRepo := postgres.NewFXQuoteRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -83,8 +92,16 @@ func main() {
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient)
 	webhookSvc := webhook.NewService(webhookRepo, queueClient)
 
-	fxSvc := fx.NewService(walletRepo, convRepo, feeSvc, stellarClient, cfg.StellarUSDCIssuer,
-		nil, fx.NewCache(), 50)
+	issuers := map[string]string{
+		"USDC": cfg.StellarUSDCIssuer,
+		"EURC": cfg.StellarEURCIssuer,
+	}
+	horizonProvider := fx.NewHorizonProvider(cfg.StellarHorizonURL, []string{"USDC-EURC", "EURC-USDC"}, issuers)
+	fxSvc := fx.NewService(
+		walletRepo, convRepo, fxQuoteRepo,
+		feeSvc, stellarClient, redisClient,
+		cfg.StellarUSDCIssuer, []fx.Provider{horizonProvider}, cfg.FXSpreadBps,
+	)
 
 	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
 	fiatSvc := fiat.NewService(fiatRepo, fwProvider, fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
