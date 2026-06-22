@@ -3,7 +3,6 @@ package config
 import (
     "encoding/hex"
     "fmt"
-    "strconv"
 
     "github.com/spf13/viper"
 )
@@ -20,10 +19,11 @@ type Config struct {
 	TreasurySecretKey string
 	PlatformFeeWalletPublicKey string
 	MigrationsPath             string
-	AlertWebhookURL            string
-	PlatformWalletID           string
-	FlutterwaveSecretKey       string
-	FlutterwaveWebhookHash     string
+	AlertWebhookURL                string
+	PlatformWalletID               string
+	FlutterwaveSecretKey           string
+	FlutterwaveWebhookHash         string
+	BalanceDiscrepancyThreshold    string
 }
 
 func Load() (*Config, error) {
@@ -69,9 +69,10 @@ func Load() (*Config, error) {
 		TreasurySecretKey: viper.GetString("TREASURY_SECRET_KEY"),
 		PlatformFeeWalletPublicKey: viper.GetString("PLATFORM_FEE_WALLET_PUBLIC_KEY"),
 		MigrationsPath:             viper.GetString("MIGRATIONS_PATH"),
-		AlertWebhookURL:            viper.GetString("ALERT_WEBHOOK_URL"),
-		PlatformWalletID:           viper.GetString("PLATFORM_WALLET_ID"),
-		FlutterwaveSecretKey:       viper.GetString("FLUTTERWAVE_SECRET_KEY"),
-		FlutterwaveWebhookHash:     viper.GetString("FLUTTERWAVE_WEBHOOK_HASH"),
+		AlertWebhookURL:             viper.GetString("ALERT_WEBHOOK_URL"),
+		PlatformWalletID:            viper.GetString("PLATFORM_WALLET_ID"),
+		FlutterwaveSecretKey:        viper.GetString("FLUTTERWAVE_SECRET_KEY"),
+		FlutterwaveWebhookHash:      viper.GetString("FLUTTERWAVE_WEBHOOK_HASH"),
+		BalanceDiscrepancyThreshold: viper.GetString("BALANCE_DISCREPANCY_THRESHOLD"),
 	}, nil
 }

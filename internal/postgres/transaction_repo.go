@@ -352,3 +352,101 @@ func (r *TransactionRepo) GetPendingStuckCount(ctx context.Context, olderThan ti
 	}
 	return count, nil
 }
+
+// GetPendingTxesForReconciliation returns pending transactions that have a Stellar
+// tx_hash stored and are older than olderThan. Uses SELECT FOR UPDATE SKIP LOCKED
+// so concurrent reconciler instances claim disjoint sets of rows without blocking.
+func (r *TransactionRepo) GetPendingTxesForReconciliation(ctx context.Context, olderThan time.Duration) ([]*domain.Transaction, error) {
+	dbTx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin reconciliation tx: %w", err)
+	}
+	defer dbTx.Rollback(ctx)
+
+	rows, err := dbTx.Query(ctx,
+		`SELECT id, COALESCE(tx_hash,''), type, status,
+		        COALESCE(from_wallet::text,''), COALESCE(to_wallet::text,''),
+		        asset, amount, COALESCE(fee,'0'), fee_bps, tenant_id, created_at,
+		        COALESCE(requeue_count, 0), reconciled_at
+		 FROM transactions
+		 WHERE status = 'pending'
+		   AND tx_hash IS NOT NULL
+		   AND created_at < NOW() - $1::interval
+		 ORDER BY created_at ASC
+		 FOR UPDATE SKIP LOCKED`,
+		olderThan.String(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query pending txes for reconciliation: %w", err)
+	}
+	defer rows.Close()
+
+	var txs []*domain.Transaction
+	for rows.Next() {
+		tx := &domain.Transaction{}
+		var amount, fee string
+		var feeBps *int
+		var tenantID *string
+		if err := rows.Scan(&tx.ID, &tx.TxHash, &tx.Type, &tx.Status,
+			&tx.FromWallet, &tx.ToWallet,
+			&tx.Asset, &amount, &fee, &feeBps, &tenantID, &tx.CreatedAt,
+			&tx.RequeueCount, &tx.ReconciledAt); err != nil {
+			return nil, err
+		}
+		tx.Amount, _ = decimal.NewFromString(amount)
+		tx.Fee, _ = decimal.NewFromString(fee)
+		if feeBps != nil {
+			tx.FeeBps = *feeBps
+		}
+		tx.TenantID = tenantID
+		txs = append(txs, tx)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	if err := dbTx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit reconciliation tx: %w", err)
+	}
+	return txs, nil
+}
+
+// UpdateTxConfirmed transitions a pending transaction to confirmed. The WHERE
+// guard on status = 'pending' prevents double-correction if two reconcilers race.
+func (r *TransactionRepo) UpdateTxConfirmed(ctx context.Context, id, txHash string) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE transactions SET status = 'confirmed', tx_hash = NULLIF($2, '') WHERE id = $1 AND status = 'pending'`,
+		id, txHash,
+	)
+	if err != nil {
+		return fmt.Errorf("update tx confirmed: %w", err)
+	}
+	return nil
+}
+
+// UpdateTxFailed transitions a pending transaction to failed. The WHERE guard
+// on status = 'pending' prevents double-correction if two reconcilers race.
+func (r *TransactionRepo) UpdateTxFailed(ctx context.Context, id string) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE transactions SET status = 'failed' WHERE id = $1 AND status = 'pending'`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("update tx failed: %w", err)
+	}
+	return nil
+}
+
+// WriteReconciliationRun persists a record of a completed reconciliation pass.
+func (r *TransactionRepo) WriteReconciliationRun(ctx context.Context, run *reconcile.ReconciliationRun) error {
+	_, err := r.db.Exec(ctx,
+		`INSERT INTO reconciliation_runs (id, started_at, completed_at, txs_checked, discrepancies_found, corrections_made)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		run.ID, run.StartedAt, run.CompletedAt, run.TxsChecked, run.DiscrepanciesFound, run.CorrectionsMade,
+	)
+	if err != nil {
+		return fmt.Errorf("write reconciliation run: %w", err)
+	}
+	return nil
+}

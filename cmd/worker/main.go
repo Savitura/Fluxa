@@ -22,6 +22,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/shopspring/decimal"
 )
 
 func main() {
@@ -50,6 +51,7 @@ func main() {
 	txRepo := postgres.NewTransactionRepo(db)
 	feeRepo := postgres.NewFeeRepo(db)
 	webhookRepo := postgres.NewWebhookRepo(db)
+	reconcileRepo := postgres.NewReconcileRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -67,11 +69,29 @@ func main() {
 	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-worker")
 	qClient := queue.NewClient(cfg.RedisURL)
 
-	reconcileSvc := reconcile.NewService(txRepo, stellarClient, alertClient, qClient, "fluxa-worker")
-	reconcileWorker := reconcile.NewWorker(reconcileSvc)
-
 	webhookSvc := webhook.NewService(webhookRepo, qClient)
 	webhookWorker := webhook.NewWorker(webhookSvc)
+
+	// Use 0 as the balance discrepancy threshold so any deviation is flagged.
+	// Override via BALANCE_DISCREPANCY_THRESHOLD env var if needed.
+	balanceThreshold := decimal.Zero
+	if cfg.BalanceDiscrepancyThreshold != "" {
+		if t, err := decimal.NewFromString(cfg.BalanceDiscrepancyThreshold); err == nil {
+			balanceThreshold = t
+		}
+	}
+
+	reconcileSvc := reconcile.NewService(
+		txRepo,
+		reconcileRepo,
+		stellarClient,
+		alertClient,
+		qClient,
+		webhookSvc,
+		"fluxa-worker",
+		balanceThreshold,
+	)
+	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 
 	redisOpt, _ := asynq.ParseRedisURI(cfg.RedisURL)
 
@@ -88,16 +108,28 @@ func main() {
 	mux.HandleFunc(queue.TypeProcessTransfer, settlementWorker.HandleProcessTransfer)
 	mux.HandleFunc(queue.TypeSyncLedger, indexerWorker.HandleSyncLedger)
 	mux.HandleFunc(queue.TypeReconcile, reconcileWorker.HandleReconcile)
+	mux.HandleFunc(queue.TypeBalanceReconcile, reconcileWorker.HandleBalanceReconcile)
 	mux.HandleFunc(queue.TypeWebhookDeliver, webhookWorker.HandleDeliver)
 
 	scheduler := asynq.NewScheduler(redisOpt, nil)
+
 	syncTask := asynq.NewTask(queue.TypeSyncLedger, nil)
 	if _, err := scheduler.Register("@every 30s", syncTask); err != nil {
 		log.Fatal().Err(err).Msg("register ledger sync scheduler")
 	}
-	reconcileTask := asynq.NewTask(queue.TypeReconcile, nil)
+
+	// Reconciliation runs every 5 minutes in the low-priority queue so it does
+	// not compete with live settlement tasks.
+	reconcileTask := asynq.NewTask(queue.TypeReconcile, nil, asynq.Queue("low"))
 	if _, err := scheduler.Register("@every 5m", reconcileTask); err != nil {
 		log.Fatal().Err(err).Msg("register reconcile scheduler")
+	}
+
+	// Balance reconciliation runs once a day; discrepancies are flagged only —
+	// never auto-corrected.
+	balanceTask := asynq.NewTask(queue.TypeBalanceReconcile, nil, asynq.Queue("low"))
+	if _, err := scheduler.Register("@daily", balanceTask); err != nil {
+		log.Fatal().Err(err).Msg("register balance reconcile scheduler")
 	}
 
 	quit := make(chan os.Signal, 1)

@@ -47,24 +47,24 @@ type depositReq struct {
 func (h *Handler) handleDeposit(w http.ResponseWriter, r *http.Request) {
 	walletID := chi.URLParam(r, "id")
 	if walletID == "" {
-		api.Error(w, http.StatusBadRequest, "wallet id is required")
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "wallet id is required")
 		return
 	}
 
 	var req depositReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, "invalid request body")
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
 	}
 
 	if err := api.Validate(req); err != nil {
-		api.Error(w, http.StatusBadRequest, err.Error())
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 		return
 	}
 
 	amount, err := decimal.NewFromString(req.Amount)
 	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
-		api.Error(w, http.StatusBadRequest, "invalid amount")
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid amount")
 		return
 	}
 
@@ -79,7 +79,7 @@ func (h *Handler) handleDeposit(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.svc.InitiateDeposit(r.Context(), dr)
 	if err != nil {
-		api.Error(w, http.StatusInternalServerError, err.Error())
+		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
 
@@ -96,24 +96,24 @@ type withdrawReq struct {
 func (h *Handler) handleWithdrawal(w http.ResponseWriter, r *http.Request) {
 	walletID := chi.URLParam(r, "id")
 	if walletID == "" {
-		api.Error(w, http.StatusBadRequest, "wallet id is required")
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "wallet id is required")
 		return
 	}
 
 	var req withdrawReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, "invalid request body")
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
 	}
 
 	if err := api.Validate(req); err != nil {
-		api.Error(w, http.StatusBadRequest, err.Error())
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 		return
 	}
 
 	amount, err := decimal.NewFromString(req.Amount)
 	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
-		api.Error(w, http.StatusBadRequest, "invalid amount")
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid amount")
 		return
 	}
 
@@ -128,7 +128,7 @@ func (h *Handler) handleWithdrawal(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.svc.InitiateWithdrawal(r.Context(), wr)
 	if err != nil {
-		api.Error(w, http.StatusInternalServerError, err.Error())
+		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
 
@@ -138,23 +138,20 @@ func (h *Handler) handleWithdrawal(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
 	if provider == "" {
-		api.Error(w, http.StatusBadRequest, "provider is required")
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "provider is required")
 		return
 	}
 
 	payload, err := io.ReadAll(r.Body)
 	if err != nil {
-		api.Error(w, http.StatusBadRequest, "read payload error")
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "read payload error")
 		return
 	}
 
-	// Flutterwave sends signature in "verif-hash" header
 	signature := r.Header.Get("verif-hash")
 
 	if err := h.svc.HandleWebhook(r.Context(), payload, signature); err != nil {
-		// Do not return 500 so provider won't keep retrying if it's a fatal validation error
-		// Log the error though.
-		api.Error(w, http.StatusBadRequest, err.Error())
+		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 		return
 	}
 

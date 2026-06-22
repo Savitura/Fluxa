@@ -13,17 +13,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
-	"fmt"
-	"time"
-
-	"github.com/fluxa/fluxa/internal/domain"
-	"github.com/fluxa/fluxa/internal/fees"
-	"github.com/fluxa/fluxa/internal/stellar"
-	"github.com/fluxa/fluxa/internal/tenant"
-	"github.com/fluxa/fluxa/internal/wallet"
-	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
-)
 
 type Quote struct {
 	SourceAsset  string          `json:"source_asset"`
@@ -53,12 +42,12 @@ type service struct {
 	stellar        stellar.Client
 	usdcIssuer     string
 
-	providers      []Provider
-	cache          *Cache
-	spreadBps      int // basis points, e.g., 50 = 0.5%
+	providers []Provider
+	cache     *Cache
+	spreadBps int // basis points, e.g., 50 = 0.5%
 }
 
-func NewService(walletRepo wallet.Repository, convRepo ConversionRepo, feeSvc fees.Service, stellarClient stellar.Client, usdcIssuer string, providers []fx.Provider, cache *fx.Cache, spreadBps int) Service {
+func NewService(walletRepo wallet.Repository, convRepo ConversionRepo, feeSvc fees.Service, stellarClient stellar.Client, usdcIssuer string, providers []Provider, cache *Cache, spreadBps int) Service {
 	return &service{
 		walletRepo:     walletRepo,
 		conversionRepo: convRepo,
@@ -72,12 +61,10 @@ func NewService(walletRepo wallet.Repository, convRepo ConversionRepo, feeSvc fe
 }
 
 func (s *service) GetQuote(ctx context.Context, sourceAsset, destAsset, amount string) (*Quote, error) {
-	// Existing GetQuote is now a thin wrapper around GetRateInfo for backward compatibility.
 	res, err := s.GetRateInfo(ctx, sourceAsset, destAsset, amount)
 	if err != nil {
 		return nil, err
 	}
-	// Convert RateResponse to Quote (mid_market_rate is the raw rate before spread).
 	quote := &Quote{
 		SourceAsset:  sourceAsset,
 		DestAsset:    destAsset,
@@ -86,7 +73,7 @@ func (s *service) GetQuote(ctx context.Context, sourceAsset, destAsset, amount s
 		FeeAmount:    res.FeeAmount,
 		NetAmount:    res.NetAmount,
 		FeeBps:       res.FeeBps,
-		Rate:         res.Rate, // already includes spread
+		Rate:         res.Rate,
 		ExpiresAt:    time.Now().UTC().Add(30 * time.Second),
 	}
 	return quote, nil
@@ -95,15 +82,13 @@ func (s *service) GetQuote(ctx context.Context, sourceAsset, destAsset, amount s
 // GetRateInfo returns detailed FX rate information, applying caching, provider fallback, spread, and stale handling.
 func (s *service) GetRateInfo(ctx context.Context, from, to, amount string) (*RateResponse, error) {
 	key := fmt.Sprintf("rate:%s:%s:%s", from, to, amount)
-	// Attempt cache fetch
 	if cached, ok := s.cache.Get(ctx, key); ok {
 		if time.Since(cached.CachedAt) < 30*time.Second {
-			return cached, nil // fresh cache
+			return cached, nil
 		}
 	}
 
-	// Determine provider
-	var selected fx.Provider
+	var selected Provider
 	for _, p := range s.providers {
 		for _, pair := range p.SupportedPairs() {
 			if pair == fmt.Sprintf("%s-%s", from, to) {
@@ -121,7 +106,6 @@ func (s *service) GetRateInfo(ctx context.Context, from, to, amount string) (*Ra
 
 	midRate, err := selected.GetRate(ctx, from, to, amount)
 	if err != nil {
-		// Provider error: fallback to stale cache if exists
 		if cached, ok := s.cache.Get(ctx, key); ok {
 			cached.Stale = true
 			return cached, nil
@@ -129,33 +113,29 @@ func (s *service) GetRateInfo(ctx context.Context, from, to, amount string) (*Ra
 		return nil, err
 	}
 
-	// Apply spread
-	spreadFactor := decimal.NewFromInt(int64(s.spreadBps)).Div(decimal.NewFromInt(10000)) // bps to fraction
+	spreadFactor := decimal.NewFromInt(int64(s.spreadBps)).Div(decimal.NewFromInt(10000))
 	finalRate := midRate.Mul(decimal.NewFromInt(1).Add(spreadFactor))
 
-	resp := &fx.RateResponse{
+	resp := &RateResponse{
 		Rate:          finalRate,
 		MidMarketRate: midRate,
 		SpreadBps:     s.spreadBps,
 		Provider:      fmt.Sprintf("%T", selected),
 		CachedAt:      time.Now().UTC(),
 		Stale:         false,
-		SourceAmount:  decimal.NewFromInt(0), // placeholder, to be filled below
-		DestAmount:    decimal.NewFromInt(0), // placeholder
+		SourceAmount:  decimal.NewFromInt(0),
+		DestAmount:    decimal.NewFromInt(0),
 		FeeAmount:     decimal.Zero,
 		NetAmount:     decimal.Zero,
 		FeeBps:        0,
 	}
 
-	// Compute source/dest amounts using rate (inverse of earlier logic)
-	// destAmount = amount (as decimal), sourceAmount = destAmount / finalRate
 	destAmt, _ := decimal.NewFromString(amount)
 	if !finalRate.IsZero() {
 		resp.SourceAmount = destAmt.Div(finalRate)
 	}
 	resp.DestAmount = destAmt
 
-	// Calculate fees via fee service
 	tenantID := tenant.IDFromContext(ctx)
 	feeResult, feeErr := s.feeSvc.CalculateConversionFee(ctx, tenantID, from, resp.SourceAmount)
 	if feeErr == nil {
@@ -164,7 +144,6 @@ func (s *service) GetRateInfo(ctx context.Context, from, to, amount string) (*Ra
 		resp.FeeBps = feeResult.FeeBps
 	}
 
-	// Cache the response
 	s.cache.Set(ctx, key, resp)
 	return resp, nil
 }
