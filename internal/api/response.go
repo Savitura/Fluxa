@@ -48,11 +48,13 @@ func InternalError(w http.ResponseWriter, err error) {
 func HandleDomainError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, domain.ErrWalletNotFound), errors.Is(err, domain.ErrTransactionNotFound),
-		errors.Is(err, domain.ErrWebhookNotFound), errors.Is(err, domain.ErrWebhookDeliveryNotFound):
+		errors.Is(err, domain.ErrWebhookNotFound), errors.Is(err, domain.ErrWebhookDeliveryNotFound),
+		errors.Is(err, domain.ErrBatchNotFound), errors.Is(err, domain.ErrScheduleNotFound):
 		NotFound(w, err.Error())
 	case errors.Is(err, domain.ErrSelfTransfer), errors.Is(err, domain.ErrInvalidAsset),
 		errors.Is(err, domain.ErrInsufficientBalance), errors.Is(err, domain.ErrSlippageExceeded),
-		errors.Is(err, domain.ErrFeeScheduleNotFound):
+		errors.Is(err, domain.ErrFeeScheduleNotFound),
+		errors.Is(err, domain.ErrBatchTooLarge), errors.Is(err, domain.ErrBatchEmpty):
 		BadRequest(w, err.Error())
 	case errors.Is(err, domain.ErrQuoteExpired):
 		UnprocessableEntity(w, "QUOTE_EXPIRED", err.Error())

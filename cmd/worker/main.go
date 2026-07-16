@@ -14,6 +14,7 @@ import (
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
 	"github.com/fluxa/fluxa/internal/reconcile"
+	"github.com/fluxa/fluxa/internal/schedule"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/transfer"
@@ -52,6 +53,7 @@ func main() {
 	feeRepo := postgres.NewFeeRepo(db)
 	webhookRepo := postgres.NewWebhookRepo(db)
 	reconcileRepo := postgres.NewReconcileRepo(db)
+	scheduleRepo := postgres.NewScheduleRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -71,6 +73,9 @@ func main() {
 
 	webhookSvc := webhook.NewService(webhookRepo, qClient)
 	webhookWorker := webhook.NewWorker(webhookSvc)
+
+	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, qClient)
+	scheduleWorker := schedule.NewWorker(scheduleRepo, transferSvc)
 
 	// Use 0 as the balance discrepancy threshold so any deviation is flagged.
 	// Override via BALANCE_DISCREPANCY_THRESHOLD env var if needed.
@@ -110,6 +115,7 @@ func main() {
 	mux.HandleFunc(queue.TypeReconcile, reconcileWorker.HandleReconcile)
 	mux.HandleFunc(queue.TypeBalanceReconcile, reconcileWorker.HandleBalanceReconcile)
 	mux.HandleFunc(queue.TypeWebhookDeliver, webhookWorker.HandleDeliver)
+	mux.HandleFunc(queue.TypeRunSchedules, scheduleWorker.HandleRunSchedules)
 
 	scheduler := asynq.NewScheduler(redisOpt, nil)
 
@@ -130,6 +136,14 @@ func main() {
 	balanceTask := asynq.NewTask(queue.TypeBalanceReconcile, nil, asynq.Queue("low"))
 	if _, err := scheduler.Register("@daily", balanceTask); err != nil {
 		log.Fatal().Err(err).Msg("register balance reconcile scheduler")
+	}
+
+	// Scheduled payouts are checked every minute — matches the acceptance
+	// window (fires within ±1 minute of next_run_at) without needing a
+	// dedicated ticker.
+	scheduleTask := asynq.NewTask(queue.TypeRunSchedules, nil)
+	if _, err := scheduler.Register("@every 1m", scheduleTask); err != nil {
+		log.Fatal().Err(err).Msg("register schedule run scheduler")
 	}
 
 	quit := make(chan os.Signal, 1)
@@ -153,6 +167,5 @@ func main() {
 	srv.Shutdown()
 	scheduler.Shutdown()
 
-	_ = transfer.NewService
 	_ = wallet.NewService
 }
