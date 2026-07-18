@@ -10,6 +10,7 @@ import (
 
 	"github.com/fluxa/fluxa/internal/alerting"
 	"github.com/fluxa/fluxa/internal/apikey"
+	"github.com/fluxa/fluxa/internal/batch"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
@@ -19,6 +20,7 @@ import (
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
 	"github.com/fluxa/fluxa/internal/reconcile"
+	"github.com/fluxa/fluxa/internal/schedule"
 	"github.com/fluxa/fluxa/internal/server"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
@@ -80,6 +82,8 @@ func main() {
 	webhookRepo := postgres.NewWebhookRepo(db)
 	reconcileRepo := postgres.NewReconcileRepo(db)
 	fxQuoteRepo := postgres.NewFXQuoteRepo(db)
+	batchRepo := postgres.NewBatchRepo(db)
+	scheduleRepo := postgres.NewScheduleRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -91,6 +95,8 @@ func main() {
 	walletSvc := wallet.NewService(walletRepo, stellarClient, cfg.MasterEncryptionKey)
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient)
 	webhookSvc := webhook.NewService(webhookRepo, queueClient)
+	batchSvc := batch.NewService(batchRepo, txRepo, transferSvc)
+	scheduleSvc := schedule.NewService(scheduleRepo, walletRepo)
 
 	issuers := map[string]string{
 		"USDC": cfg.StellarUSDCIssuer,
@@ -135,11 +141,13 @@ func main() {
 	feeHandler := fees.NewHandler(feeSvc)
 	apikeyHandler := apikey.NewHandler(apiKeyRepo)
 	webhookHandler := webhook.NewHandler(webhookSvc)
+	batchHandler := batch.NewHandler(batchSvc)
+	scheduleHandler := schedule.NewHandler(scheduleSvc)
 
 	srv := server.New(
 		walletHandler, transferHandler, fxHandler, fiatHandler,
 		feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo,
-		webhookHandler, cfg.Port,
+		webhookHandler, batchHandler, scheduleHandler, cfg.Port,
 	)
 
 	quit := make(chan os.Signal, 1)

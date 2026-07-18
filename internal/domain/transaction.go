@@ -22,20 +22,22 @@ const (
 )
 
 type Transaction struct {
-	ID            string
-	TxHash        string
-	Type          TransactionType
-	Status        TransactionStatus
-	FromWallet    string
-	ToWallet      string
-	Asset         string
-	Amount        decimal.Decimal
-	Fee           decimal.Decimal
-	FeeBps        int
-	TenantID      *string
-	CreatedAt     time.Time
-	ReconciledAt  *time.Time
-	RequeueCount  int
+	ID           string
+	TxHash       string
+	Type         TransactionType
+	Status       TransactionStatus
+	FromWallet   string
+	ToWallet     string
+	Asset        string
+	Amount       decimal.Decimal
+	Fee          decimal.Decimal
+	FeeBps       int
+	TenantID     *string
+	BatchID      *string
+	Reference    string
+	CreatedAt    time.Time
+	ReconciledAt *time.Time
+	RequeueCount int
 }
 
 func (t *Transaction) NetAmount() decimal.Decimal {

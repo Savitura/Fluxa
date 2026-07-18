@@ -79,6 +79,8 @@ fluxa/
 │   ├── queue/                # Asynq client + task type definitions
 │   ├── wallet/               # Wallet service + HTTP handler
 │   ├── transfer/             # Transfer service + HTTP handler
+│   ├── batch/                # Batch transfers + CSV export, reuses transfer settlement
+│   ├── schedule/             # Recurring payouts + Asynq periodic task
 │   ├── fx/                   # FX service + rate providers + HTTP handler
 │   ├── fees/                 # Fee calculation and collection
 │   ├── settlement/           # Settlement engine + Asynq task handler
@@ -188,9 +190,24 @@ POST /v1/transfers         Initiate transfer (202 Accepted — async)
 GET  /v1/transfers/:id     Poll status
 GET  /v1/transfers         List (filter by wallet, status, date)
 POST /v1/transfers/batch   Up to 100 transfers in one call
+GET  /v1/transfers/batch/:batchId          Batch status with per-transfer breakdown
+GET  /v1/transfers/batch/:batchId/export   CSV download of batch results
 ```
 
 **Status flow:** `pending` → `confirmed` | `failed`
+
+**Batch status** is derived live from its linked transactions: `pending` → `processing` → `partial` | `completed` | `failed`.
+
+### Scheduled Payouts
+
+```http
+POST   /v1/schedules       Create a recurring transfer (daily | weekly | monthly)
+GET    /v1/schedules       List schedules
+PATCH  /v1/schedules/:id   Pause, resume, or update amount/frequency/end_date
+DELETE /v1/schedules/:id   Cancel a schedule
+```
+
+A background worker checks for due schedules every minute and enqueues a normal transfer for each one — a paused schedule is skipped until resumed.
 
 ### FX
 

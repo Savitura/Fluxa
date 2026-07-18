@@ -7,6 +7,7 @@ const (
 	TypeReconcile        = "reconcile:run"
 	TypeBalanceReconcile = "reconcile:balance"
 	TypeWebhookDeliver   = "webhook:deliver"
+	TypeRunSchedules     = "schedule:run"
 )
 
 type ProcessTransferPayload struct {

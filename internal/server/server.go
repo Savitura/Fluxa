@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/apikey"
+	"github.com/fluxa/fluxa/internal/batch"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/reconcile"
+	"github.com/fluxa/fluxa/internal/schedule"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
@@ -34,6 +36,8 @@ func New(
 	apikeyHandler *apikey.Handler,
 	apiKeyRepo *postgres.APIKeyRepo,
 	webhookHandler *webhook.Handler,
+	batchHandler *batch.Handler,
+	scheduleHandler *schedule.Handler,
 	port string,
 ) *Server {
 	r := chi.NewRouter()
@@ -56,7 +60,9 @@ func New(
 		r.Route("/wallets/{id}/withdraw", fiatHandler.WithdrawRoutes())
 		r.Route("/webhooks/fiat", fiatHandler.WebhookRoutes())
 		r.Route("/transfers", transferHandler.Routes())
+		r.Route("/transfers/batch", batchHandler.Routes())
 		r.Route("/transactions", transferHandler.TransactionRoutes())
+		r.Route("/schedules", scheduleHandler.Routes())
 		r.Route("/fx", fxHandler.Routes())
 		r.Route("/fees", feeHandler.Routes())
 		r.Route("/admin/fees", feeHandler.AdminRoutes())
