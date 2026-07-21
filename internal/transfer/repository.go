@@ -12,4 +12,7 @@ type Repository interface {
 	UpdateStatus(ctx context.Context, id string, status domain.TransactionStatus, txHash string) error
 	ListByWallet(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error)
 	ListByBatch(ctx context.Context, batchID string) ([]*domain.Transaction, error)
+	// ExistsByTxHash reports whether a transaction with the given Stellar hash
+	// has already been recorded, used to keep indexer sync idempotent.
+	ExistsByTxHash(ctx context.Context, txHash string) (bool, error)
 }
