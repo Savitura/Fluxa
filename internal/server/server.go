@@ -11,6 +11,9 @@ import (
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fx"
+	"github.com/fluxa/fluxa/internal/auth"
+	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/org"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/schedule"
@@ -27,6 +30,8 @@ type Server struct {
 }
 
 func New(
+	authHandler *auth.Handler,
+	orgHandler *org.Handler,
 	walletHandler *wallet.Handler,
 	transferHandler *transfer.Handler,
 	fxHandler *fx.Handler,
@@ -38,6 +43,7 @@ func New(
 	webhookHandler *webhook.Handler,
 	batchHandler *batch.Handler,
 	scheduleHandler *schedule.Handler,
+	jwtSecret []byte,
 	port string,
 ) *Server {
 	r := chi.NewRouter()
@@ -53,21 +59,54 @@ func New(
 	})
 
 	r.Route("/v1", func(r chi.Router) {
-		r.Use(AuthMiddleware(apiKeyRepo))
-		r.Route("/keys", apikeyHandler.Routes())
-		r.Route("/wallets", walletHandler.Routes())
-		r.Route("/wallets/{id}/deposit", fiatHandler.DepositRoutes())
-		r.Route("/wallets/{id}/withdraw", fiatHandler.WithdrawRoutes())
-		r.Route("/webhooks/fiat", fiatHandler.WebhookRoutes())
-		r.Route("/transfers", transferHandler.Routes())
-		r.Route("/transfers/batch", batchHandler.Routes())
-		r.Route("/transactions", transferHandler.TransactionRoutes())
-		r.Route("/schedules", scheduleHandler.Routes())
-		r.Route("/fx", fxHandler.Routes())
-		r.Route("/fees", feeHandler.Routes())
-		r.Route("/admin/fees", feeHandler.AdminRoutes())
-		r.Route("/admin", reconcileHandler.AdminRoutes())
-		r.Route("/webhooks", webhookHandler.Routes())
+		// Unauthenticated public endpoints
+		r.Route("/auth", authHandler.Routes())
+		r.Post("/org/invites/accept", orgHandler.AcceptInvite)
+
+		// Authenticated endpoints
+		r.Group(func(r chi.Router) {
+			r.Use(AuthMiddleware(apiKeyRepo, jwtSecret))
+
+			// API Keys (Owner & Admin only for creation & revocation)
+			r.Route("/keys", func(r chi.Router) {
+				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Post("/", apikeyHandler.Create)
+				r.Get("/", apikeyHandler.List)
+				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Delete("/{id}", apikeyHandler.Revoke)
+			})
+
+			// Org Member Management (Owner & Admin for invite, role update, remove)
+			r.Route("/org", func(r chi.Router) {
+				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Post("/members/invite", orgHandler.InviteMember)
+				r.Get("/members", orgHandler.ListMembers)
+				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Patch("/members/{userId}", orgHandler.UpdateRole)
+				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Delete("/members/{userId}", orgHandler.RemoveMember)
+			})
+
+			// Webhooks (Owner & Admin for management, viewer/dev read)
+			r.Route("/webhooks", func(r chi.Router) {
+				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Post("/", webhookHandler.Register)
+				r.Get("/", webhookHandler.List)
+				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Delete("/{id}", webhookHandler.Delete)
+				r.Get("/{id}/deliveries", webhookHandler.ListDeliveries)
+			})
+
+			// Operational routes (Require not viewer for mutating calls)
+			r.Group(func(r chi.Router) {
+				r.Use(RequireNotViewer)
+				r.Route("/wallets", walletHandler.Routes())
+				r.Route("/wallets/{id}/deposit", fiatHandler.DepositRoutes())
+				r.Route("/wallets/{id}/withdraw", fiatHandler.WithdrawRoutes())
+				r.Route("/webhooks/fiat", fiatHandler.WebhookRoutes())
+				r.Route("/transfers", transferHandler.Routes())
+				r.Route("/transfers/batch", batchHandler.Routes())
+				r.Route("/transactions", transferHandler.TransactionRoutes())
+				r.Route("/schedules", scheduleHandler.Routes())
+				r.Route("/fx", fxHandler.Routes())
+				r.Route("/fees", feeHandler.Routes())
+				r.Route("/admin/fees", feeHandler.AdminRoutes())
+				r.Route("/admin", reconcileHandler.AdminRoutes())
+			})
+		})
 	})
 
 	srv := &http.Server{

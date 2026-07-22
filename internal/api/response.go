@@ -49,13 +49,23 @@ func HandleDomainError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, domain.ErrWalletNotFound), errors.Is(err, domain.ErrTransactionNotFound),
 		errors.Is(err, domain.ErrWebhookNotFound), errors.Is(err, domain.ErrWebhookDeliveryNotFound),
-		errors.Is(err, domain.ErrBatchNotFound), errors.Is(err, domain.ErrScheduleNotFound):
+		errors.Is(err, domain.ErrBatchNotFound), errors.Is(err, domain.ErrScheduleNotFound),
+		errors.Is(err, domain.ErrUserNotFound), errors.Is(err, domain.ErrOrgMemberNotFound),
+		errors.Is(err, domain.ErrInviteNotFound):
 		NotFound(w, err.Error())
 	case errors.Is(err, domain.ErrSelfTransfer), errors.Is(err, domain.ErrInvalidAsset),
 		errors.Is(err, domain.ErrInsufficientBalance), errors.Is(err, domain.ErrSlippageExceeded),
 		errors.Is(err, domain.ErrFeeScheduleNotFound),
-		errors.Is(err, domain.ErrBatchTooLarge), errors.Is(err, domain.ErrBatchEmpty):
+		errors.Is(err, domain.ErrBatchTooLarge), errors.Is(err, domain.ErrBatchEmpty),
+		errors.Is(err, domain.ErrWalletLimitReached), errors.Is(err, domain.ErrTransferLimitReached),
+		errors.Is(err, domain.ErrWebhookLimitReached):
 		BadRequest(w, err.Error())
+	case errors.Is(err, domain.ErrUserAlreadyExists):
+		Error(w, http.StatusConflict, "CONFLICT", err.Error())
+	case errors.Is(err, domain.ErrInvalidCredentials):
+		Error(w, http.StatusUnauthorized, "UNAUTHORIZED", err.Error())
+	case errors.Is(err, domain.ErrForbidden):
+		Error(w, http.StatusForbidden, "FORBIDDEN", err.Error())
 	case errors.Is(err, domain.ErrQuoteExpired):
 		UnprocessableEntity(w, "QUOTE_EXPIRED", err.Error())
 	case errors.Is(err, domain.ErrQuoteAlreadyUsed):

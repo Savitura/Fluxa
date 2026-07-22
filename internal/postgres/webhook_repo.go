@@ -183,3 +183,13 @@ func (r *WebhookRepo) ListDeliveries(ctx context.Context, endpointID string, lim
 	}
 	return deliveries, rows.Err()
 }
+
+func (r *WebhookRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM webhooks WHERE tenant_id = $1 AND active = true`, tenantID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count webhooks by tenant: %w", err)
+	}
+	return count, nil
+}
+

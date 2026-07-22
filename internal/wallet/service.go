@@ -9,9 +9,14 @@ import (
 	"github.com/fluxa/fluxa/internal/crypto"
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/stellar"
+	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/google/uuid"
 	horizonclient "github.com/stellar/go/clients/horizonclient"
 )
+
+type TenantGetter interface {
+	GetByID(ctx context.Context, id string) (*domain.Tenant, error)
+}
 
 type Balance struct {
 	AssetCode string `json:"asset_code"`
@@ -25,20 +30,37 @@ type Service interface {
 }
 
 type service struct {
-	repo      Repository
-	stellar   stellar.Client
-	masterKey []byte
+	repo       Repository
+	stellar    stellar.Client
+	masterKey  []byte
+	tenantRepo TenantGetter
 }
 
-func NewService(repo Repository, stellarClient stellar.Client, masterKey []byte) Service {
-	return &service{
+func NewService(repo Repository, stellarClient stellar.Client, masterKey []byte, tenantRepo ...TenantGetter) Service {
+	s := &service{
 		repo:      repo,
 		stellar:   stellarClient,
 		masterKey: masterKey,
 	}
+	if len(tenantRepo) > 0 {
+		s.tenantRepo = tenantRepo[0]
+	}
+	return s
 }
 
 func (s *service) CreateWallet(ctx context.Context) (*domain.Wallet, error) {
+	tenantID := tenant.IDFromContext(ctx)
+	if tenantID != "" && s.tenantRepo != nil {
+		t, err := s.tenantRepo.GetByID(ctx, tenantID)
+		if err == nil && t != nil {
+			limit := t.GetWalletLimit()
+			count, err := s.repo.CountByTenant(ctx, tenantID)
+			if err == nil && count >= limit {
+				return nil, domain.ErrWalletLimitReached
+			}
+		}
+	}
+
 	pubKey, secretKey, err := stellar.GenerateKeypair()
 	if err != nil {
 		return nil, fmt.Errorf("generate keypair: %w", err)

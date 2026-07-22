@@ -495,3 +495,19 @@ func (r *TransactionRepo) WriteReconciliationRun(ctx context.Context, run *recon
 	}
 	return nil
 }
+
+func (r *TransactionRepo) CountMonthlyTransfersByTenant(ctx context.Context, tenantID string, year int, month time.Month) (int, error) {
+	startDate := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+	endDate := startDate.AddDate(0, 1, 0)
+
+	var count int
+	err := r.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM transactions WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3`,
+		tenantID, startDate, endDate,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count monthly transfers: %w", err)
+	}
+	return count, nil
+}
+

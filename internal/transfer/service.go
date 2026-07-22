@@ -14,6 +14,10 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+type TenantGetter interface {
+	GetByID(ctx context.Context, id string) (*domain.Tenant, error)
+}
+
 type Service interface {
 	InitiateTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal) (*domain.Transaction, error)
 	InitiateBatchTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error)
@@ -26,10 +30,15 @@ type service struct {
 	walletRepo walletpkg.Repository
 	feeSvc     fees.Service
 	queue      *queue.Client
+	tenantRepo TenantGetter
 }
 
-func NewService(repo Repository, walletRepo walletpkg.Repository, feeSvc fees.Service, q *queue.Client) Service {
-	return &service{repo: repo, walletRepo: walletRepo, feeSvc: feeSvc, queue: q}
+func NewService(repo Repository, walletRepo walletpkg.Repository, feeSvc fees.Service, q *queue.Client, tenantRepo ...TenantGetter) Service {
+	s := &service{repo: repo, walletRepo: walletRepo, feeSvc: feeSvc, queue: q}
+	if len(tenantRepo) > 0 {
+		s.tenantRepo = tenantRepo[0]
+	}
+	return s
 }
 
 func (s *service) InitiateTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal) (*domain.Transaction, error) {
@@ -43,6 +52,21 @@ func (s *service) InitiateBatchTransfer(ctx context.Context, fromID, toID, asset
 func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error) {
 	if fromID == toID {
 		return nil, domain.ErrSelfTransfer
+	}
+
+	tenantID := tenant.IDFromContext(ctx)
+	if tenantID != "" && s.tenantRepo != nil {
+		t, err := s.tenantRepo.GetByID(ctx, tenantID)
+		if err == nil && t != nil {
+			limit := t.GetTransferLimit()
+			if limit > 0 {
+				now := time.Now().UTC()
+				count, err := s.repo.CountMonthlyTransfersByTenant(ctx, tenantID, now.Year(), now.Month())
+				if err == nil && count >= limit {
+					return nil, domain.ErrTransferLimitReached
+				}
+			}
+		}
 	}
 
 	if _, err := s.walletRepo.GetByID(ctx, fromID); err != nil {

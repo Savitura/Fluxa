@@ -29,6 +29,7 @@ type Repository interface {
 	UpdateDelivery(ctx context.Context, d *domain.WebhookDelivery) error
 	GetDeliveryByID(ctx context.Context, id string) (*domain.WebhookDelivery, error)
 	ListDeliveries(ctx context.Context, endpointID string, limit, offset int) ([]*domain.WebhookDelivery, error)
+	CountByTenant(ctx context.Context, tenantID string) (int, error)
 }
 
 // Service exposes webhook management and dispatch operations.
@@ -41,30 +42,51 @@ type Service interface {
 	Deliver(ctx context.Context, deliveryID string) error
 }
 
-type service struct {
-	repo   Repository
-	queue  *queue.Client
-	client *http.Client
+type TenantGetter interface {
+	GetByID(ctx context.Context, id string) (*domain.Tenant, error)
 }
 
-func NewService(repo Repository, q *queue.Client) Service {
-	return &service{
+type service struct {
+	repo       Repository
+	queue      *queue.Client
+	client     *http.Client
+	tenantRepo TenantGetter
+}
+
+func NewService(repo Repository, q *queue.Client, tenantRepo ...TenantGetter) Service {
+	s := &service{
 		repo:   repo,
 		queue:  q,
 		client: &http.Client{Timeout: 10 * time.Second},
 	}
+	if len(tenantRepo) > 0 {
+		s.tenantRepo = tenantRepo[0]
+	}
+	return s
 }
 
 func (s *service) Register(ctx context.Context, url string, events []string) (*domain.WebhookEndpoint, error) {
-	secret, err := generateSecret()
-	if err != nil {
-		return nil, fmt.Errorf("generate webhook secret: %w", err)
-	}
-
 	tenantID := tenant.IDFromContext(ctx)
 	var tenantPtr *string
 	if tenantID != "" {
 		tenantPtr = &tenantID
+		if s.tenantRepo != nil {
+			t, err := s.tenantRepo.GetByID(ctx, tenantID)
+			if err == nil && t != nil {
+				limit := t.GetWebhookLimit()
+				if limit > 0 {
+					count, err := s.repo.CountByTenant(ctx, tenantID)
+					if err == nil && count >= limit {
+						return nil, domain.ErrWebhookLimitReached
+					}
+				}
+			}
+		}
+	}
+
+	secret, err := generateSecret()
+	if err != nil {
+		return nil, fmt.Errorf("generate webhook secret: %w", err)
 	}
 
 	if events == nil {
