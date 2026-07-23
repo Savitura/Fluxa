@@ -43,6 +43,21 @@ func (r *TransactionRepo) Create(ctx context.Context, tx *domain.Transaction) er
 	return nil
 }
 
+// ExistsByTxHash reports whether a transaction with the given Stellar hash has
+// already been recorded, used to keep indexer sync idempotent across restarts
+// and stream reconnects.
+func (r *TransactionRepo) ExistsByTxHash(ctx context.Context, txHash string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM transactions WHERE tx_hash = $1)`,
+		txHash,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check transaction exists by hash: %w", err)
+	}
+	return exists, nil
+}
+
 func (r *TransactionRepo) GetByID(ctx context.Context, id string) (*domain.Transaction, error) {
 	tx := &domain.Transaction{}
 	var amount, fee string

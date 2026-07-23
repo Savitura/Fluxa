@@ -67,6 +67,10 @@ func (f *fakeTxRepo) ListByBatch(_ context.Context, batchID string) ([]*domain.T
 	return f.byBatch[batchID], nil
 }
 
+func (f *fakeTxRepo) ExistsByTxHash(_ context.Context, txHash string) (bool, error) {
+	return false, nil
+}
+
 // fakeTransferSvc implements transfer.Service. It simulates the settlement
 // worker having already confirmed each transfer synchronously, except for
 // destinations listed in failOn, which behave like a submission failure.

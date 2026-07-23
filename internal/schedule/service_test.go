@@ -86,6 +86,14 @@ func (f *fakeWalletRepo) List(_ context.Context, limit, offset int) ([]*domain.W
 	return nil, nil
 }
 
+func (f *fakeWalletRepo) UpsertBalance(_ context.Context, walletID, assetCode, issuer string, balance decimal.Decimal) error {
+	return nil
+}
+
+func (f *fakeWalletRepo) UpdateSyncCursor(_ context.Context, walletID, cursor string) error {
+	return nil
+}
+
 func TestCreate_RejectsUnknownWallet(t *testing.T) {
 	svc := NewService(newFakeScheduleRepo(), newFakeWalletRepo("from-1"))
 

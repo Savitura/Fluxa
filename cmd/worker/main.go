@@ -40,7 +40,8 @@ func main() {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	db, err := postgres.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -67,6 +68,16 @@ func main() {
 
 	idx := indexer.New(walletRepo, txRepo, stellarClient)
 	indexerWorker := indexer.NewWorker(idx)
+
+	// StreamAll keeps a live Horizon SSE connection open per wallet so new
+	// payments land in the DB in real time; the @every 30s indexer:sync task
+	// below is the incremental-poll fallback that also catches up any wallet
+	// whose stream is reconnecting.
+	go func() {
+		if err := idx.StreamAll(ctx, 1000, 0); err != nil {
+			log.Error().Err(err).Msg("indexer: stream all wallets failed")
+		}
+	}()
 
 	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-worker")
 	qClient := queue.NewClient(cfg.RedisURL)
@@ -164,6 +175,7 @@ func main() {
 
 	<-quit
 	log.Info().Msg("worker shutting down")
+	cancel() // stop indexer payment streams
 	srv.Shutdown()
 	scheduler.Shutdown()
 
