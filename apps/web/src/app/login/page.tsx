@@ -2,22 +2,38 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/lib/auth';
+import { api, ApiClientError } from '@/lib/api';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
   const router = useRouter();
+  const { login } = useAuth();
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    
-    // Simulate API call to get JWT
-    setTimeout(() => {
-      setIsLoading(false);
+    setError('');
+
+    try {
+      await api.health();
+      login(apiKey);
       router.push('/overview');
-    }, 1000);
+    } catch (err) {
+      if (err instanceof ApiClientError) {
+        if (err.status === 401) {
+          setError('Invalid API key. Please check and try again.');
+        } else {
+          setError(err.message);
+        }
+      } else {
+        setError('Unable to connect to the API. Check your API URL.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -27,38 +43,29 @@ export default function LoginPage() {
           <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent">
             Fluxa Tenant
           </h1>
-          <p className="text-muted text-[15px]">Sign in to your control plane</p>
+          <p className="text-muted text-[15px]">Sign in with your API key</p>
         </div>
 
         <form onSubmit={handleLogin} className="flex flex-col gap-6">
           <div className="flex flex-col gap-2">
-            <label htmlFor="email" className="text-sm font-medium text-muted">Email Address</label>
+            <label htmlFor="apiKey" className="text-sm font-medium text-muted">API Key</label>
             <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              className="bg-black/20 border border-border p-3 rounded-lg text-foreground focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-              placeholder="admin@example.com"
-            />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <label htmlFor="password" className="text-sm font-medium text-muted">Password</label>
-            <input
-              id="password"
+              id="apiKey"
               type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
               required
-              className="bg-black/20 border border-border p-3 rounded-lg text-foreground focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-              placeholder="••••••••"
+              className="bg-black/20 border border-border p-3 rounded-lg text-foreground focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all font-mono"
+              placeholder="fx_..."
             />
           </div>
 
-          <button 
-            type="submit" 
+          {error && (
+            <p className="text-red-500 text-sm text-center">{error}</p>
+          )}
+
+          <button
+            type="submit"
             className="bg-accent hover:bg-accent-hover text-white border-none p-3.5 rounded-lg font-semibold cursor-pointer transition-all shadow-[0_4px_12px_rgba(139,92,246,0.3)] mt-2 hover:-translate-y-px disabled:opacity-70 disabled:cursor-not-allowed"
             disabled={isLoading}
           >
