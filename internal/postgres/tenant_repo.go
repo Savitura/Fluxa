@@ -19,10 +19,13 @@ func NewTenantRepo(db *pgxpool.Pool) *TenantRepo {
 }
 
 func (r *TenantRepo) Create(ctx context.Context, t *domain.Tenant) error {
+	if t.AccountType == "" {
+		t.AccountType = domain.AccountTypeIndividual
+	}
 	_, err := r.db.Exec(ctx,
-		`INSERT INTO tenants (id, name, email, created_at)
-		 VALUES ($1, $2, $3, $4)`,
-		t.ID, t.Name, t.Email, t.CreatedAt,
+		`INSERT INTO tenants (id, name, email, account_type, max_wallets, max_transfers_per_month, max_webhooks, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		t.ID, t.Name, t.Email, t.AccountType, t.MaxWallets, t.MaxTransfersPerMonth, t.MaxWebhooks, t.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert tenant: %w", err)
@@ -33,9 +36,10 @@ func (r *TenantRepo) Create(ctx context.Context, t *domain.Tenant) error {
 func (r *TenantRepo) GetByID(ctx context.Context, id string) (*domain.Tenant, error) {
 	t := &domain.Tenant{}
 	err := r.db.QueryRow(ctx,
-		`SELECT id, name, email, created_at FROM tenants WHERE id = $1`,
+		`SELECT id, name, email, account_type, max_wallets, max_transfers_per_month, max_webhooks, created_at
+		 FROM tenants WHERE id = $1`,
 		id,
-	).Scan(&t.ID, &t.Name, &t.Email, &t.CreatedAt)
+	).Scan(&t.ID, &t.Name, &t.Email, &t.AccountType, &t.MaxWallets, &t.MaxTransfersPerMonth, &t.MaxWebhooks, &t.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errors.New("tenant not found")
@@ -44,3 +48,4 @@ func (r *TenantRepo) GetByID(ctx context.Context, id string) (*domain.Tenant, er
 	}
 	return t, nil
 }
+

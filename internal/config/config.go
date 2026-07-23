@@ -24,7 +24,7 @@ type Config struct {
 	PlatformWalletID            string
 	FlutterwaveSecretKey        string
 	FlutterwaveWebhookHash      string
-	BalanceDiscrepancyThreshold string
+	JWTSecret                   string
 	FXSpreadBps                 int
 }
 
@@ -37,6 +37,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("STELLAR_HORIZON_URL", "https://horizon-testnet.stellar.org")
 	viper.SetDefault("MIGRATIONS_PATH", "db/migrations")
 	viper.SetDefault("FX_SPREAD_BPS", "50") // default 0.5%
+	viper.SetDefault("JWT_SECRET", "fluxa-default-jwt-secret-key-change-in-production")
 
 	// Load .env file if present (dev convenience)
 	viper.SetConfigFile(".env")
@@ -77,6 +78,7 @@ func Load() (*Config, error) {
 		FlutterwaveSecretKey:        viper.GetString("FLUTTERWAVE_SECRET_KEY"),
 		FlutterwaveWebhookHash:      viper.GetString("FLUTTERWAVE_WEBHOOK_HASH"),
 		BalanceDiscrepancyThreshold: viper.GetString("BALANCE_DISCREPANCY_THRESHOLD"),
+		JWTSecret:                   viper.GetString("JWT_SECRET"),
 		FXSpreadBps:                 viper.GetInt("FX_SPREAD_BPS"),
 	}, nil
 }

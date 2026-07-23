@@ -10,6 +10,7 @@ import (
 
 	"github.com/fluxa/fluxa/internal/alerting"
 	"github.com/fluxa/fluxa/internal/apikey"
+	"github.com/fluxa/fluxa/internal/auth"
 	"github.com/fluxa/fluxa/internal/batch"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
@@ -17,6 +18,7 @@ import (
 	"github.com/fluxa/fluxa/internal/fiat/flutterwave"
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/indexer"
+	"github.com/fluxa/fluxa/internal/org"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
 	"github.com/fluxa/fluxa/internal/reconcile"
@@ -73,6 +75,10 @@ func main() {
 	redisClient := redis.NewClient(redisOpt)
 	defer redisClient.Close()
 
+	tenantRepo := postgres.NewTenantRepo(db)
+	userRepo := postgres.NewUserRepo(db)
+	orgRepo := postgres.NewOrgRepo(db)
+
 	walletRepo := postgres.NewWalletRepo(db)
 	txRepo := postgres.NewTransactionRepo(db)
 	convRepo := postgres.NewConversionRepo(db)
@@ -91,10 +97,15 @@ func main() {
 	queueClient := queue.NewClient(cfg.RedisURL)
 	defer queueClient.Close()
 
+	jwtSecretBytes := []byte(cfg.JWTSecret)
+
+	authSvc := auth.NewService(userRepo, tenantRepo, orgRepo, jwtSecretBytes)
+	orgSvc := org.NewService(orgRepo, userRepo, tenantRepo, jwtSecretBytes)
+
 	feeSvc := fees.NewService(feeRepo)
-	walletSvc := wallet.NewService(walletRepo, stellarClient, cfg.MasterEncryptionKey)
-	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient)
-	webhookSvc := webhook.NewService(webhookRepo, queueClient)
+	walletSvc := wallet.NewService(walletRepo, stellarClient, cfg.MasterEncryptionKey, tenantRepo)
+	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient, tenantRepo)
+	webhookSvc := webhook.NewService(webhookRepo, queueClient, tenantRepo)
 	batchSvc := batch.NewService(batchRepo, txRepo, transferSvc)
 	scheduleSvc := schedule.NewService(scheduleRepo, walletRepo)
 
@@ -134,6 +145,8 @@ func main() {
 	)
 	reconcileHandler := reconcile.NewHandler(reconcileSvc)
 
+	authHandler := auth.NewHandler(authSvc)
+	orgHandler := org.NewHandler(orgSvc)
 	walletHandler := wallet.NewHandler(walletSvc)
 	transferHandler := transfer.NewHandler(transferSvc)
 	fxHandler := fx.NewHandler(fxSvc)
@@ -145,9 +158,9 @@ func main() {
 	scheduleHandler := schedule.NewHandler(scheduleSvc)
 
 	srv := server.New(
-		walletHandler, transferHandler, fxHandler, fiatHandler,
+		authHandler, orgHandler, walletHandler, transferHandler, fxHandler, fiatHandler,
 		feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo,
-		webhookHandler, batchHandler, scheduleHandler, cfg.Port,
+		webhookHandler, batchHandler, scheduleHandler, jwtSecretBytes, cfg.Port,
 	)
 
 	quit := make(chan os.Signal, 1)
