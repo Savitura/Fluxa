@@ -9,6 +9,7 @@ const (
 	TypeWebhookDeliver   = "webhook:deliver"
 	TypeRunSchedules     = "schedule:run"
 	TypeTreasurySweep    = "treasury:sweep"
+	TypeRefreshSanctions = "compliance:sanctions_refresh"
 )
 
 type ProcessTransferPayload struct {

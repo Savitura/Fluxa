@@ -9,6 +9,7 @@ import (
 
 	"github.com/fluxa/fluxa/internal/alerting"
 	"github.com/fluxa/fluxa/internal/assets"
+	"github.com/fluxa/fluxa/internal/compliance"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/indexer"
@@ -76,6 +77,7 @@ func main() {
 	reconcileRepo := postgres.NewReconcileRepo(repoDB)
 	scheduleRepo := postgres.NewScheduleRepo(repoDB)
 	treasuryRepo := postgres.NewTreasuryRepo(repoDB)
+	complianceRepo := postgres.NewComplianceRepo(repoDB).WithPrimary(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -142,6 +144,45 @@ func main() {
 	treasuryWorker := treasury.NewWorker(treasurySvc)
 
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, qClient)
+
+	// The worker screens too: scheduled payouts run here and go through
+	// transfer.initiate() exactly like an API-initiated transfer, so leaving
+	// the screener off would let them bypass compliance entirely.
+	var complianceWorker *compliance.Worker
+	if cfg.ComplianceEnabled {
+		sanctionsSet := compliance.NewSanctionsSet()
+		if err := sanctionsSet.LoadFromRepository(ctx, complianceRepo); err != nil {
+			log.Error().Err(err).Msg("compliance: initial sanctions load failed; transfers will be held until it succeeds")
+		}
+		sanctionsSet.StartReloader(ctx, complianceRepo,
+			time.Duration(cfg.ComplianceReloadMinutes)*time.Minute)
+
+		structuringUnit, err := decimal.NewFromString(cfg.ComplianceStructuringUnit)
+		if err != nil {
+			log.Fatal().Err(err).Msg("parse COMPLIANCE_STRUCTURING_UNIT")
+		}
+
+		screener := compliance.NewCompositeScreener(
+			compliance.NewSanctionsScreener(sanctionsSet, cfg.ComplianceFuzzyThreshold),
+			compliance.NewVelocityScreener(complianceRepo, compliance.VelocityConfig{
+				Window:           time.Duration(cfg.ComplianceVelocityWindowMin) * time.Minute,
+				MaxTransfers:     cfg.ComplianceVelocityMax,
+				StructuringUnit:  structuringUnit,
+				RoundTripWindow:  time.Duration(cfg.ComplianceRoundTripMin) * time.Minute,
+				PlatformWalletID: cfg.PlatformWalletID,
+			}),
+		)
+
+		complianceSvc := compliance.NewService(complianceRepo, screener, sanctionsSet, txRepo, qClient, webhookSvc)
+		transferSvc = transferSvc.WithScreener(complianceSvc)
+		complianceWorker = compliance.NewWorker(
+			complianceRepo,
+			compliance.NewHTTPSDNSource(cfg.OFACSDNURL, nil),
+			sanctionsSet,
+			webhookSvc,
+		)
+	}
+
 	scheduleWorker := schedule.NewWorker(scheduleRepo, transferSvc)
 
 	// Use 0 as the balance discrepancy threshold so any deviation is flagged.
@@ -186,6 +227,9 @@ func main() {
 	mux.HandleFunc(queue.TypeWebhookDeliver, webhookWorker.HandleDeliver)
 	mux.HandleFunc(queue.TypeRunSchedules, scheduleWorker.HandleRunSchedules)
 	mux.HandleFunc(queue.TypeTreasurySweep, treasuryWorker.HandleSweep)
+	if complianceWorker != nil {
+		mux.HandleFunc(queue.TypeRefreshSanctions, complianceWorker.HandleRefreshSanctions)
+	}
 
 	scheduler := asynq.NewScheduler(asynqOpt, nil)
 
@@ -222,6 +266,16 @@ func main() {
 	treasurySweepTask := asynq.NewTask(queue.TypeTreasurySweep, nil, asynq.Queue("low"))
 	if _, err := scheduler.Register("@daily", treasurySweepTask); err != nil {
 		log.Fatal().Err(err).Msg("register treasury sweep scheduler")
+	}
+
+	// The OFAC SDN list is republished on business days; a daily refresh on the
+	// low queue keeps every process's in-memory set current via
+	// sanctions_entities without competing with live settlement.
+	if complianceWorker != nil {
+		sanctionsTask := asynq.NewTask(queue.TypeRefreshSanctions, nil, asynq.Queue("low"))
+		if _, err := scheduler.Register("@daily", sanctionsTask); err != nil {
+			log.Fatal().Err(err).Msg("register sanctions refresh scheduler")
+		}
 	}
 
 	quit := make(chan os.Signal, 1)

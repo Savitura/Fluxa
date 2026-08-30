@@ -68,6 +68,7 @@ type batchResponse struct {
 	TotalCount   int                     `json:"total_count"`
 	SuccessCount int                     `json:"success_count"`
 	FailedCount  int                     `json:"failed_count"`
+	HeldCount    int                     `json:"held_count"`
 	CreatedAt    string                  `json:"created_at"`
 	Transfers    []batchTransferResponse `json:"transfers,omitempty"`
 }
@@ -87,6 +88,8 @@ func toBatchResponse(result *Result) batchResponse {
 			resp.SuccessCount++
 		case domain.StatusFailed:
 			resp.FailedCount++
+		case domain.StatusComplianceHold:
+			resp.HeldCount++
 		}
 		resp.Transfers[i] = batchTransferResponse{
 			ID:        tx.ID,

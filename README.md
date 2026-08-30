@@ -68,7 +68,7 @@ Client Applications
 | `cmd/api` | HTTP server — handles all REST requests, enqueues async work |
 | `cmd/worker` | Asynq worker — settles transfers, runs ledger indexer, processes webhooks |
 
-Transfers are **asynchronous**. `POST /v1/transfers` returns `202 Accepted` with a `pending` transaction immediately. Poll `GET /v1/transfers/:id` or receive a `transfer.settled` webhook for the final status.
+Transfers are **asynchronous**. `POST /v1/transfers` returns `202 Accepted` with a `pending` transaction immediately. Poll `GET /v1/transfers/:id` or receive a `transfer.settled` webhook for the final status. A transfer stopped by compliance screening comes back as `compliance_hold` instead of `pending` and is not settled until it is approved.
 
 ---
 
@@ -242,7 +242,7 @@ DELETE /v1/webhooks/:id    Remove endpoint
 GET    /v1/webhooks/:id/deliveries  Delivery log
 ```
 
-**Event types:** `transfer.initiated` · `transfer.settled` · `transfer.failed` · `wallet.funded` · `conversion.completed`
+**Event types:** `transfer.initiated` · `transfer.settled` · `transfer.failed` · `wallet.funded` · `conversion.completed` · `transfer.compliance_hold` · `transfer.compliance_approved` · `transfer.compliance_rejected` · `sanctions.refresh_failed`
 
 ### Fees
 
@@ -267,6 +267,25 @@ POST /v1/wallets/{id}/deposit/fiat   Initiate fiat deposit
 POST /v1/wallets/{id}/withdraw/fiat  Initiate fiat withdrawal
 POST /v1/webhooks/fiat/{provider}   Fiat provider webhook receiver
 ```
+
+### Compliance (Owner & Admin only)
+
+Every transfer is screened before it is enqueued for settlement. A blocked
+transfer is refused with `403 TRANSFER_BLOCKED_SANCTIONS` and no transaction
+is created; a held transfer is persisted as `compliance_hold` and waits for a
+decision here.
+
+```http
+GET  /v1/admin/compliance/reviews              List held transfers (filter: ?status=pending)
+GET  /v1/admin/compliance/reviews/{id}         Get a single review
+POST /v1/admin/compliance/reviews/{id}/approve Release a held transfer for settlement
+POST /v1/admin/compliance/reviews/{id}/reject  Reject a held transfer
+GET  /v1/admin/compliance/sanctions-status     OFAC SDN list state and last refresh
+```
+
+Screening **fails closed**: if the sanctions list cannot be loaded, transfers
+are held for review rather than cleared. Check `sanctions-status` if every
+transfer is suddenly being held — `loaded: false` is the signal.
 
 ### Health
 

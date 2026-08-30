@@ -113,6 +113,10 @@ func (f *fakeTransferRepo) ListByBatch(_ context.Context, batchID string) ([]*do
 func (f *fakeTransferRepo) GetByIdempotencyKey(_ context.Context, orgID, idempotencyKey string) (*domain.Transaction, error) {
 	return nil, domain.ErrTransactionNotFound
 }
+func (f *fakeTransferRepo) ClaimForSubmission(_ context.Context, _ string) error {
+	return nil
+}
+
 func (f *fakeTransferRepo) ExistsByTxHash(_ context.Context, txHash string) (bool, error) {
 	return f.existing[txHash], nil
 }
@@ -130,10 +134,6 @@ func (f *fakeTransferRepo) UpsertByTxHash(_ context.Context, tx *domain.Transact
 	f.created = append(f.created, tx)
 	f.existing[tx.TxHash] = true
 	return nil
-}
-
-func (f *fakeTransferRepo) CountMonthlyTransfersByTenant(_ context.Context, _ string, _ int, _ time.Month) (int, error) {
-	return 0, nil
 }
 
 type fakeStellarClient struct {
@@ -165,14 +165,14 @@ func (f *fakeStellarClient) OperationsForTransaction(hash string) ([]operations.
 	return nil, nil
 }
 
+func (m *fakeStellarClient) PaymentsForAccount(_ string, _ string, _ int) ([]operations.Payment, error) {
+	return nil, nil
+}
+
 func (f *fakeStellarClient) Payments(accountID, cursor string, limit uint) ([]operations.Operation, error) {
 	if f.payments != nil {
 		return f.payments(accountID, cursor, limit)
 	}
-	return nil, nil
-}
-
-func (f *fakeStellarClient) PaymentsForAccount(accountID string, cursor string, limit int) ([]horizon.Payment, error) {
 	return nil, nil
 }
 

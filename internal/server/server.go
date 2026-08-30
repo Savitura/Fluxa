@@ -11,6 +11,7 @@ import (
 	"github.com/fluxa/fluxa/internal/apikey"
 	"github.com/fluxa/fluxa/internal/auth"
 	"github.com/fluxa/fluxa/internal/batch"
+	"github.com/fluxa/fluxa/internal/compliance"
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
@@ -50,6 +51,7 @@ func New(
 	batchHandler *batch.Handler,
 	scheduleHandler *schedule.Handler,
 	treasuryHandler *treasury.Handler,
+	complianceHandler *compliance.Handler,
 	jwtSecret []byte,
 	port string,
 	healthChecks map[string]DependencyCheck,
@@ -148,6 +150,12 @@ func New(
 				r.Route("/admin/anchors", anchorHandler.AdminRoutes())
 				r.Route("/admin", reconcileHandler.AdminRoutes())
 				r.Route("/admin/treasury", treasuryHandler.AdminRoutes())
+				// Mounted at /admin/compliance, not /admin: reconcileHandler
+				// already owns the bare /admin pattern above, and chi panics
+				// when two sub-routers share one.
+				if complianceHandler != nil {
+					r.Route("/admin/compliance", complianceHandler.AdminRoutes())
+				}
 			})
 		})
 	})

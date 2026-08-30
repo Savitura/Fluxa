@@ -7,6 +7,8 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/fluxa/fluxa/internal/stellar"
+	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/hibiken/asynq"
 	"github.com/shopspring/decimal"
 )
@@ -31,6 +33,14 @@ func (f *fakeTransferSvc) InitiateTransferIdempotent(ctx context.Context, fromID
 
 func (f *fakeTransferSvc) InitiateBatchTransfer(_ context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error) {
 	return &domain.Transaction{ID: "tx-1"}, nil
+}
+
+func (f *fakeTransferSvc) WithScreener(_ transfer.Screener) transfer.Service {
+	return f
+}
+
+func (f *fakeTransferSvc) WithStellarClient(_ stellar.Client) transfer.Service {
+	return f
 }
 
 func (f *fakeTransferSvc) GetTransaction(_ context.Context, id string) (*domain.Transaction, error) {

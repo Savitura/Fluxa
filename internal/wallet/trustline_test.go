@@ -117,6 +117,10 @@ func (m *fullMockStellar) TransactionDetail(hash string) (horizon.Transaction, e
 func (m *fullMockStellar) OperationsForTransaction(hash string) ([]operations.Operation, error) {
 	return nil, nil
 }
+func (m *fullMockStellar) PaymentsForAccount(_ string, _ string, _ int) ([]operations.Payment, error) {
+	return nil, nil
+}
+
 func (m *fullMockStellar) Payments(accountID, cursor string, limit uint) ([]operations.Operation, error) {
 	return nil, nil
 }

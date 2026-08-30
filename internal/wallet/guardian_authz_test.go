@@ -31,7 +31,7 @@ func (f *fakeContractService) AddTrustline(ctx context.Context, walletID, assetC
 func (f *fakeContractService) ExecuteTransfer(ctx context.Context, walletID, destination, assetCode, issuer string, amount decimal.Decimal, memo string) (string, error) {
 	return "tx", nil
 }
-func (f *fakeContractService) WithSigner(signer stellar.Signer) wallet.Service         { return f }
+func (f *fakeContractService) WithSigner(signer stellar.Signer) wallet.Service          { return f }
 func (f *fakeContractService) WithFXService(fxSvc wallet.FXRateGetter) wallet.Service   { return f }
 func (f *fakeContractService) WithIssuers(usdcIssuer, eurcIssuer string) wallet.Service { return f }
 func (f *fakeContractService) GetContractState(ctx context.Context, walletID string) (*wallet.ContractState, error) {

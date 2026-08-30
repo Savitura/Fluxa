@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/fluxa/fluxa/internal/domain"
-	"github.com/fluxa/fluxa/internal/org"
 )
 
 type mockOrgRepo struct {

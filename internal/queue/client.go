@@ -58,6 +58,18 @@ func (c *Client) EnqueueLedgerSync(ctx context.Context, walletID, cursor string)
 	return err
 }
 
+// EnqueueSanctionsRefresh triggers an out-of-band OFAC SDN refresh. The daily
+// run is registered on the scheduler; this exists for manual re-runs. It uses
+// the low queue so a refresh never competes with live settlement.
+func (c *Client) EnqueueSanctionsRefresh(ctx context.Context) error {
+	task := asynq.NewTask(TypeRefreshSanctions, nil)
+	_, err := c.inner.EnqueueContext(ctx, task,
+		asynq.MaxRetry(3),
+		asynq.Queue("low"),
+	)
+	return err
+}
+
 func (c *Client) EnqueueWebhookDelivery(ctx context.Context, deliveryID string) error {
 	payload, err := json.Marshal(WebhookDeliverPayload{DeliveryID: deliveryID})
 	if err != nil {

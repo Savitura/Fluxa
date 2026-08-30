@@ -203,6 +203,10 @@ func (m *mockTransferService) ListTransactions(ctx context.Context, walletID str
 	return nil, nil
 }
 
+func (m *mockTransferService) WithScreener(_ transfer.Screener) transfer.Service {
+	return m
+}
+
 func (m *mockTransferService) WithStellarClient(stellarClient stellar.Client) transfer.Service {
 	return m
 }

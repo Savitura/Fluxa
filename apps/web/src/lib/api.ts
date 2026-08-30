@@ -35,6 +35,34 @@ async function request<T>(
   return body as T;
 }
 
+export interface ComplianceReview {
+  id: string;
+  transaction_id: string;
+  status: 'pending' | 'approved' | 'rejected';
+  risk_score: number;
+  rules_fired: string[];
+  reason?: string;
+  reviewed_by?: string;
+  review_notes?: string;
+  reviewed_at?: string;
+  created_at: string;
+}
+
+export interface SanctionsStatus {
+  loaded: boolean;
+  entity_count: number;
+  address_count: number;
+  name_count: number;
+  updated_at?: string;
+  last_refresh?: {
+    status: 'success' | 'failed';
+    entity_count: number;
+    duration_ms: number;
+    error?: string;
+    finished_at: string;
+  };
+}
+
 export interface HealthResponse {
   status: string;
   services?: Record<string, string>;
@@ -506,6 +534,44 @@ class FluxaAPI {
     return request<Record<string, unknown>>('/v1/admin/reconciliation/run', {
       method: 'POST',
     });
+  }
+  // Compliance admin. Screening runs on the backend before a transfer is
+  // enqueued; these endpoints only read and decide reviews.
+  async listComplianceReviews(params?: {
+    status?: 'pending' | 'approved' | 'rejected';
+    limit?: number;
+    offset?: number;
+  }): Promise<{ reviews: ComplianceReview[] }> {
+    const qs = new URLSearchParams();
+    if (params?.status) qs.set('status', params.status);
+    if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+    if (params?.offset !== undefined) qs.set('offset', String(params.offset));
+    const query = qs.toString();
+    return request<{ reviews: ComplianceReview[] }>(
+      `/v1/admin/compliance/reviews${query ? `?${query}` : ''}`
+    );
+  }
+
+  async getComplianceReview(id: string): Promise<ComplianceReview> {
+    return request<ComplianceReview>(`/v1/admin/compliance/reviews/${id}`);
+  }
+
+  async approveComplianceReview(id: string, notes?: string): Promise<ComplianceReview> {
+    return request<ComplianceReview>(`/v1/admin/compliance/reviews/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ notes: notes ?? '' }),
+    });
+  }
+
+  async rejectComplianceReview(id: string, notes?: string): Promise<ComplianceReview> {
+    return request<ComplianceReview>(`/v1/admin/compliance/reviews/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ notes: notes ?? '' }),
+    });
+  }
+
+  async getSanctionsStatus(): Promise<SanctionsStatus> {
+    return request<SanctionsStatus>('/v1/admin/compliance/sanctions-status');
   }
 }
 

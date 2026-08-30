@@ -362,6 +362,67 @@ tenant not found in context
 
 ---
 
+## Compliance Errors
+
+### `403` — `TRANSFER_BLOCKED_SANCTIONS` | `transfer blocked: destination matches a sanctions list entry`
+
+| Field | Value |
+|---|---|
+| **HTTP Status** | `403 Forbidden` |
+| **Code** | `TRANSFER_BLOCKED_SANCTIONS` |
+| **Description** | The destination address appears on the OFAC SDN list. No transaction is created; the attempt is recorded in `compliance_blocks`. |
+| **Resolution** | Terminal — retrying with the same destination will always fail. This is distinct from the generic `FORBIDDEN`, which indicates insufficient permissions. Contact compliance if you believe the match is incorrect. |
+
+**Example response:**
+```json
+{
+  "error": {
+    "code": "TRANSFER_BLOCKED_SANCTIONS",
+    "message": "transfer blocked: destination matches a sanctions list entry"
+  }
+}
+```
+
+### `404` — `NOT_FOUND` | `compliance review not found`
+
+| Field | Value |
+|---|---|
+| **HTTP Status** | `404 Not Found` |
+| **Code** | `NOT_FOUND` |
+| **Description** | No compliance review exists with that id for your organization. |
+| **Resolution** | List pending reviews with `GET /v1/admin/compliance/reviews` and use an id from that response. |
+
+**Example response:**
+```json
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "compliance review not found"
+  }
+}
+```
+
+### `409` — `REVIEW_ALREADY_DECIDED` | `compliance review has already been decided`
+
+| Field | Value |
+|---|---|
+| **HTTP Status** | `409 Conflict` |
+| **Code** | `REVIEW_ALREADY_DECIDED` |
+| **Description** | The review has already been approved or rejected. Decisions are terminal, which is what stops two reviewers from releasing the same payment twice. |
+| **Resolution** | Fetch the review with `GET /v1/admin/compliance/reviews/{id}` to see the recorded outcome and reviewer. |
+
+**Example response:**
+```json
+{
+  "error": {
+    "code": "REVIEW_ALREADY_DECIDED",
+    "message": "compliance review has already been decided"
+  }
+}
+```
+
+---
+
 ## Rate Limit Errors
 
 > Rate limiting is not yet implemented in the current version. This section is a placeholder for future error codes.
@@ -400,6 +461,8 @@ When the Stellar network returns an error during transaction submission, Fluxa m
 | `400` | `BAD_REQUEST` | `invalid request body` | General |
 | `400` | `BAD_REQUEST` | `wallet id is required` | Fiat |
 | `400` | `BAD_REQUEST` | `invalid amount` | Fiat |
+| `403` | `TRANSFER_BLOCKED_SANCTIONS` | `transfer blocked: destination matches a sanctions list entry` | Compliance |
+| `409` | `REVIEW_ALREADY_DECIDED` | `compliance review has already been decided` | Compliance |
 | `401` | — | `missing or invalid authorization header` | Auth |
 | `401` | — | `invalid api key` | Auth |
 | `401` | — | `revoked api key` | Auth |
@@ -408,6 +471,7 @@ When the Stellar network returns an error during transaction submission, Fluxa m
 | `404` | `NOT_FOUND` | `transaction not found` | Transfers |
 | `404` | `NOT_FOUND` | `webhook endpoint not found` | Webhooks |
 | `404` | `NOT_FOUND` | `webhook delivery not found` | Webhooks |
+| `404` | `NOT_FOUND` | `compliance review not found` | Compliance |
 | `500` | `INTERNAL_ERROR` | `an unexpected error occurred` | General |
 | `500` | `INTERNAL_ERROR` | `an unexpected error occurred` (Stellar submission failure) | Stellar |
 | `500` | `INTERNAL_ERROR` | `an unexpected error occurred` (decryption failure) | Crypto |

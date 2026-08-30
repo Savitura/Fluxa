@@ -72,7 +72,7 @@ func (m *mockConvRepo) Create(_ context.Context, c *domain.Conversion) error {
 
 type mockAuditRepo struct{}
 
-func (m *mockAuditRepo) CreateQuote(_ context.Context, _ *Quote) error { return nil }
+func (m *mockAuditRepo) CreateQuote(_ context.Context, _ *Quote) error      { return nil }
 func (m *mockAuditRepo) MarkQuoteUsed(_ context.Context, _, _ string) error { return nil }
 
 type mockFeeSvc struct{}
@@ -108,6 +108,10 @@ func (m *mockStellar) TransactionDetail(_ string) (horizon.Transaction, error) {
 func (m *mockStellar) OperationsForTransaction(_ string) ([]operations.Operation, error) {
 	return nil, nil
 }
+func (m *mockStellar) PaymentsForAccount(_ string, _ string, _ int) ([]operations.Payment, error) {
+	return nil, nil
+}
+
 func (m *mockStellar) Payments(_, _ string, _ uint) ([]operations.Operation, error) {
 	return nil, nil
 }

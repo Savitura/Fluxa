@@ -14,12 +14,12 @@ import (
 	"github.com/fluxa/fluxa/internal/assets"
 	"github.com/fluxa/fluxa/internal/auth"
 	"github.com/fluxa/fluxa/internal/batch"
+	"github.com/fluxa/fluxa/internal/compliance"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fiat/flutterwave"
-	"github.com/fluxa/fluxa/internal/fiat/yellowcard"
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/indexer"
 	"github.com/fluxa/fluxa/internal/org"
@@ -114,6 +114,7 @@ func main() {
 	anchorRepo := postgres.NewAnchorRepo(repoDB)
 	treasuryRepo := postgres.NewTreasuryRepo(repoDB)
 	idempotencyRepo := postgres.NewIdempotencyRepo(repoDB)
+	complianceRepo := postgres.NewComplianceRepo(repoDB).WithPrimary(db)
 	idemMW := idempotency.Middleware(idempotencyRepo)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
@@ -138,6 +139,44 @@ func main() {
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient, tenantRepo).
 		WithStellarClient(stellarClient)
 	webhookSvc := webhook.NewService(webhookRepo, queueClient, tenantRepo)
+
+	// Compliance screening sits in front of settlement, so it is wired before
+	// the services that initiate transfers. When disabled, no screener is
+	// attached and transfers keep their pre-compliance behaviour.
+	var complianceHandler *compliance.Handler
+	if cfg.ComplianceEnabled {
+		sanctionsSet := compliance.NewSanctionsSet()
+
+		// Not fatal, unlike anchorRegistry.Load: screening fails closed, so an
+		// API that boots before the first SDN refresh holds transfers for
+		// review rather than clearing them. Log loudly and carry on.
+		if err := sanctionsSet.LoadFromRepository(ctx, complianceRepo); err != nil {
+			log.Error().Err(err).Msg("compliance: initial sanctions load failed; transfers will be held until it succeeds")
+		}
+		sanctionsSet.StartReloader(ctx, complianceRepo,
+			time.Duration(cfg.ComplianceReloadMinutes)*time.Minute)
+
+		structuringUnit, err := decimal.NewFromString(cfg.ComplianceStructuringUnit)
+		if err != nil {
+			log.Fatal().Err(err).Msg("parse COMPLIANCE_STRUCTURING_UNIT")
+		}
+
+		screener := compliance.NewCompositeScreener(
+			compliance.NewSanctionsScreener(sanctionsSet, cfg.ComplianceFuzzyThreshold),
+			compliance.NewVelocityScreener(complianceRepo, compliance.VelocityConfig{
+				Window:           time.Duration(cfg.ComplianceVelocityWindowMin) * time.Minute,
+				MaxTransfers:     cfg.ComplianceVelocityMax,
+				StructuringUnit:  structuringUnit,
+				RoundTripWindow:  time.Duration(cfg.ComplianceRoundTripMin) * time.Minute,
+				PlatformWalletID: cfg.PlatformWalletID,
+			}),
+		)
+
+		complianceSvc := compliance.NewService(complianceRepo, screener, sanctionsSet, txRepo, queueClient, webhookSvc)
+		complianceHandler = compliance.NewHandler(complianceSvc)
+		transferSvc = transferSvc.WithScreener(complianceSvc)
+	}
+
 	batchSvc := batch.NewService(batchRepo, txRepo, transferSvc)
 	scheduleSvc := schedule.NewService(scheduleRepo, walletRepo)
 
@@ -153,10 +192,13 @@ func main() {
 	)
 	walletSvc.WithFXService(fxSvc)
 
+	// fiat.Service drives exactly one rail. Flutterwave is the live provider;
+	// the Yellow Card provider is implemented (internal/fiat/yellowcard) but
+	// not wired, because fiat.NewService takes a single Rail and there is no
+	// per-request provider selection yet.
 	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
-	ycProvider := yellowcard.NewProvider(cfg.YellowCardAPIKey, cfg.YellowCardWebhookKey, cfg.YellowCardSandbox)
 
-	fiatSvc := fiat.NewService(fiatRepo, []fiat.Provider{fwProvider, ycProvider}, fxSvc, transferSvc, cfg.PlatformWalletID)
+	fiatSvc := fiat.NewService(fiatRepo, fiat.NewRailAdapter(fwProvider), fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
 
 	anchorRegistry := anchor.NewRegistry(anchorRepo, nil)
 	if err := anchorRegistry.Load(ctx); err != nil {
@@ -271,7 +313,7 @@ func main() {
 		authHandler, orgHandler, walletHandler, transferHandler, fxHandler, fiatHandler,
 		anchorFiatHandler, anchorHandler,
 		feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo,
-		webhookHandler, batchHandler, scheduleHandler, treasuryHandler, jwtSecretBytes, cfg.Port,
+		webhookHandler, batchHandler, scheduleHandler, treasuryHandler, complianceHandler, jwtSecretBytes, cfg.Port,
 		map[string]server.DependencyCheck{
 			"postgres": db.Ping,
 			"replica":  func(ctx context.Context) error { return repoDB.ReplicaAvailable(ctx) },

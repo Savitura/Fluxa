@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	horizonclient "github.com/stellar/go/clients/horizonclient"
 	"github.com/shopspring/decimal"
+	horizonclient "github.com/stellar/go/clients/horizonclient"
 )
 
 // Provider fetches mid-market FX rates for a set of currency pairs.

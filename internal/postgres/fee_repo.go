@@ -44,7 +44,11 @@ func (r *FeeRepo) GetSchedule(ctx context.Context, tenantID *string, asset strin
 func (r *FeeRepo) getScheduleForTenant(ctx context.Context, tenantID *string, asset string) (*domain.FeeSchedule, error) {
 	schedule := &domain.FeeSchedule{}
 	var tenantIDStr *string
-	var minFee, maxFee string
+	// Both amount columns are nullable — the seeded default fee row leaves
+	// max_fee_amount NULL to mean "no cap" — so they must be scanned into
+	// pointers. Scanning NULL into a plain string fails every transfer with
+	// a 500 at fee calculation.
+	var minFee, maxFee *string
 
 	query := `
 		SELECT id, tenant_id, transfer_fee_bps, conversion_fee_bps,
@@ -72,9 +76,11 @@ func (r *FeeRepo) getScheduleForTenant(ctx context.Context, tenantID *string, as
 	}
 
 	schedule.TenantID = tenantIDStr
-	schedule.MinFeeAmount, _ = decimal.NewFromString(minFee)
-	if maxFee != "" {
-		maxVal, _ := decimal.NewFromString(maxFee)
+	if minFee != nil {
+		schedule.MinFeeAmount, _ = decimal.NewFromString(*minFee)
+	}
+	if maxFee != nil && *maxFee != "" {
+		maxVal, _ := decimal.NewFromString(*maxFee)
 		schedule.MaxFeeAmount = &maxVal
 	}
 

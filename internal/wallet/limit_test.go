@@ -40,7 +40,6 @@ func (m *mockRepo) UpdateSyncCursor(ctx context.Context, walletID, cursor string
 	return nil
 }
 
-
 type mockTenantRepo struct {
 	tenant *domain.Tenant
 }

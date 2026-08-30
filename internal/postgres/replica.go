@@ -48,7 +48,20 @@ func (db *ReplicaAwareDB) QueryRow(ctx context.Context, sql string, args ...inte
 	if db.replica == nil || !isRead(sql) {
 		return db.primary.QueryRow(ctx, sql, args...)
 	}
-	return &fallbackRow{replica: db.replica.QueryRow(ctx, sql, args...), primary: db.primary.QueryRow(ctx, sql, args...), onFallback: db.recordFallback}
+	// The primary is deliberately NOT queried here. pgxpool.QueryRow acquires a
+	// connection and only releases it when Scan is called, so eagerly building a
+	// primary row that the happy path never scans leaks one primary connection
+	// per read — the pool is exhausted within a few hundred reads and every
+	// subsequent query then blocks until its context deadline. The primary is
+	// consulted lazily, inside Scan, only when the replica actually fails.
+	return &fallbackRow{
+		ctx:        ctx,
+		sql:        sql,
+		args:       args,
+		replica:    db.replica.QueryRow(ctx, sql, args...),
+		primary:    db.primary,
+		onFallback: db.recordFallback,
+	}
 }
 func (db *ReplicaAwareDB) ReplicaAvailable(ctx context.Context) error {
 	if db.replica == nil {
@@ -66,15 +79,26 @@ func isRead(sql string) bool {
 	return strings.HasPrefix(s, "SELECT") || strings.HasPrefix(s, "WITH") || strings.HasPrefix(s, "SHOW") || strings.HasPrefix(s, "EXPLAIN")
 }
 
+// rowQuerier is the slice of the primary pool fallbackRow needs. Narrowing it
+// keeps the "primary is untouched unless the replica fails" rule testable
+// without a live database.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
+}
+
 type fallbackRow struct {
-	replica, primary pgx.Row
-	onFallback       func(error)
+	ctx        context.Context
+	sql        string
+	args       []interface{}
+	replica    pgx.Row
+	primary    rowQuerier
+	onFallback func(error)
 }
 
 func (r *fallbackRow) Scan(dest ...interface{}) error {
 	if err := r.replica.Scan(dest...); err != nil {
 		r.onFallback(err)
-		return r.primary.Scan(dest...)
+		return r.primary.QueryRow(r.ctx, r.sql, r.args...).Scan(dest...)
 	}
 	return nil
 }

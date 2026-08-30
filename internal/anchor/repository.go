@@ -16,6 +16,6 @@ type Repository interface {
 	GetAnchorByHomeDomain(ctx context.Context, homeDomain string) (*domain.Anchor, error)
 
 	CreateTransaction(ctx context.Context, t *domain.AnchorTransaction) error
-	GetTransactionByID(ctx context.Context, id string) (*domain.AnchorTransaction, error)
-	UpdateTransactionStatus(ctx context.Context, id, status string, completedAt *time.Time) error
+	GetTransactionByID(ctx context.Context, id string, tenantID *string) (*domain.AnchorTransaction, error)
+	UpdateTransactionStatus(ctx context.Context, id, status string, completedAt *time.Time, tenantID *string) error
 }

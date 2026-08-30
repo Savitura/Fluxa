@@ -12,14 +12,15 @@ import (
 // and the migration schema.
 func TestTransactionStatusesMatchEnum(t *testing.T) {
 	// This is the canonical set of statuses allowed by the DB enum.
-	// It must match the ALTER TYPE in 000021 and the original CREATE TYPE
-	// in 000002.
+	// It must match the ALTER TYPEs in 000021 and 000022, and the original
+	// CREATE TYPE in 000002.
 	validStatuses := map[string]bool{
-		"pending":                true,
-		"submitted":              true,
-		"confirmed":              true,
-		"failed":                 true,
-		"reconciliation_failed":  true,
+		"pending":               true,
+		"submitted":             true,
+		"confirmed":             true,
+		"failed":                true,
+		"reconciliation_failed": true,
+		"compliance_hold":       true,
 	}
 
 	allStatuses := []domain.TransactionStatus{
@@ -28,6 +29,7 @@ func TestTransactionStatusesMatchEnum(t *testing.T) {
 		domain.StatusConfirmed,
 		domain.StatusFailed,
 		domain.StatusReconciliationFailed,
+		domain.StatusComplianceHold,
 	}
 
 	for _, s := range allStatuses {
@@ -61,6 +63,7 @@ func TestAllStatusesAreNonEmpty(t *testing.T) {
 		{"StatusConfirmed", domain.StatusConfirmed},
 		{"StatusFailed", domain.StatusFailed},
 		{"StatusReconciliationFailed", domain.StatusReconciliationFailed},
+		{"StatusComplianceHold", domain.StatusComplianceHold},
 	}
 
 	for _, s := range statuses {

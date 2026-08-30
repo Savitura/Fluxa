@@ -120,13 +120,15 @@ func (s *service) ExportCSV(ctx context.Context, id string) (string, error) {
 // current settlement status, so it always reflects live worker progress
 // without needing a separate write path back into the batches table.
 func aggregateStatus(txs []*domain.Transaction) domain.BatchStatus {
-	var succeeded, failed int
+	var succeeded, failed, held int
 	for _, tx := range txs {
 		switch tx.Status {
 		case domain.StatusConfirmed:
 			succeeded++
 		case domain.StatusFailed:
 			failed++
+		case domain.StatusComplianceHold:
+			held++
 		}
 	}
 
@@ -134,6 +136,12 @@ func aggregateStatus(txs []*domain.Transaction) domain.BatchStatus {
 	resolved := succeeded + failed
 
 	switch {
+	// Held children need an explicit arm ahead of the progress checks. They
+	// are not "processing" — nothing will move them without a human decision —
+	// and reporting a batch as completed or failed while one is still parked
+	// would hide the hold entirely.
+	case held > 0 && resolved+held == total:
+		return domain.BatchStatusComplianceHold
 	case resolved == 0:
 		return domain.BatchStatusPending
 	case resolved < total:

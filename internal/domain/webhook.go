@@ -11,6 +11,11 @@ const (
 	EventWalletFunded           EventType = "wallet.funded"
 	EventConversionCompleted    EventType = "conversion.completed"
 	EventTreasurySweepCompleted EventType = "treasury.sweep_completed"
+
+	EventTransferComplianceHold     EventType = "transfer.compliance_hold"
+	EventTransferComplianceApproved EventType = "transfer.compliance_approved"
+	EventTransferComplianceRejected EventType = "transfer.compliance_rejected"
+	EventSanctionsRefreshFailed     EventType = "sanctions.refresh_failed"
 )
 
 type DeliveryStatus string

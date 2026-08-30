@@ -21,6 +21,14 @@ type TenantGetter interface {
 	GetByID(ctx context.Context, id string) (*domain.Tenant, error)
 }
 
+// Screener is the narrow view of internal/compliance this service needs.
+// It is declared here, and exchanges only domain types, so the transfer
+// package does not depend on the compliance package.
+type Screener interface {
+	ScreenTransfer(ctx context.Context, req domain.ScreeningRequest) (*domain.ScreeningDecision, error)
+	RecordHold(ctx context.Context, tx *domain.Transaction, decision *domain.ScreeningDecision) error
+}
+
 type Service interface {
 	InitiateTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal) (*domain.Transaction, error)
 	// InitiateTransferIdempotent behaves like InitiateTransfer, but first
@@ -34,6 +42,10 @@ type Service interface {
 	GetTransaction(ctx context.Context, id string) (*domain.Transaction, error)
 	ListTransactions(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error)
 	WithStellarClient(stellarClient stellar.Client) Service
+	// WithScreener enables compliance screening. It is optional so the
+	// worker's screener-less wiring still compiles; when unset, transfers
+	// are not screened.
+	WithScreener(screener Screener) Service
 }
 
 type service struct {
@@ -43,6 +55,7 @@ type service struct {
 	queue      *queue.Client
 	tenantRepo TenantGetter
 	stellar    stellar.Client
+	screener   Screener
 }
 
 func NewService(repo Repository, walletRepo walletpkg.Repository, feeSvc fees.Service, q *queue.Client, tenantRepo ...TenantGetter) Service {
@@ -55,6 +68,11 @@ func NewService(repo Repository, walletRepo walletpkg.Repository, feeSvc fees.Se
 
 func (s *service) WithStellarClient(stellarClient stellar.Client) Service {
 	s.stellar = stellarClient
+	return s
+}
+
+func (s *service) WithScreener(screener Screener) Service {
+	s.screener = screener
 	return s
 }
 
@@ -95,7 +113,8 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 	if err != nil {
 		return nil, fmt.Errorf("source wallet: %w", err)
 	}
-	if _, err := s.walletRepo.GetByID(ctx, toID); err != nil {
+	dstWallet, err := s.walletRepo.GetByID(ctx, toID)
+	if err != nil {
 		return nil, fmt.Errorf("destination wallet: %w", err)
 	}
 
@@ -103,6 +122,43 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 	if asset != "XLM" {
 		if err := s.validateTrustline(ctx, fromID, srcWallet.PublicKey, asset); err != nil {
 			return nil, err
+		}
+	}
+
+	// Screening runs here rather than in the handler so that batch transfers
+	// and scheduled payouts, which both funnel through initiate(), are covered
+	// by the same call.
+	status := domain.StatusPending
+	var decision *domain.ScreeningDecision
+	if s.screener != nil {
+		decision, err = s.screener.ScreenTransfer(ctx, domain.ScreeningRequest{
+			OrgID:         tenantID,
+			FromWalletID:  fromID,
+			ToWalletID:    toID,
+			FromPublicKey: srcWallet.PublicKey,
+			ToPublicKey:   dstWallet.PublicKey,
+			Asset:         asset,
+			Amount:        amount,
+		})
+		if err != nil || decision == nil {
+			// Fail closed. A screening failure must never become a pass, so an
+			// unusable result is treated as a hold rather than propagated as a
+			// 500 that a client would simply retry.
+			decision = &domain.ScreeningDecision{
+				Status:     domain.ScreeningHold,
+				RulesFired: []string{"screener_error"},
+				Reason:     "screening could not be completed",
+				RiskScore:  50,
+			}
+		}
+
+		switch decision.Status {
+		case domain.ScreeningBlocked:
+			// No transaction row is written: the compliance_blocks row the
+			// screener already persisted is the record of this attempt.
+			return nil, domain.ErrTransferBlockedSanctions
+		case domain.ScreeningHold:
+			status = domain.StatusComplianceHold
 		}
 	}
 
@@ -124,7 +180,7 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 	tx := &domain.Transaction{
 		ID:             uuid.New().String(),
 		Type:           domain.TypeTransfer,
-		Status:         domain.StatusPending,
+		Status:         status,
 		FromWallet:     fromID,
 		ToWallet:       toID,
 		Asset:          asset,
@@ -147,6 +203,16 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 		if err := s.repo.Create(ctx, tx); err != nil {
 			return nil, fmt.Errorf("persist transaction: %w", err)
 		}
+	}
+
+	if tx.Status == domain.StatusComplianceHold {
+		// Deliberately not enqueued. The transfer stays parked until a
+		// compliance officer approves it, which resets the row to pending and
+		// enqueues it then.
+		if err := s.screener.RecordHold(ctx, tx, decision); err != nil {
+			return nil, fmt.Errorf("record compliance hold: %w", err)
+		}
+		return tx, nil
 	}
 
 	if s.queue != nil {

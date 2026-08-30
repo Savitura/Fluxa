@@ -1172,6 +1172,213 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /v1/admin/compliance/reviews:
+    get:
+      operationId: listComplianceReviews
+      summary: "List compliance reviews"
+      description: |
+        Lists transfers held by compliance screening. A held transfer is
+        persisted with status `compliance_hold` and is deliberately not
+        enqueued for settlement until it is approved.
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["pending", "approved", "rejected"]
+          description: "Filter by review status"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: "Compliance reviews"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reviews:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ComplianceReview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/compliance/reviews/{id}:
+    get:
+      operationId: getComplianceReview
+      summary: "Get a compliance review"
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: "Compliance review"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplianceReview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: "Compliance review not found"
+
+  /v1/admin/compliance/reviews/{id}/approve:
+    post:
+      operationId: approveComplianceReview
+      summary: "Approve a held transfer"
+      description: |
+        Releases a held transfer. The transaction is reset to `pending` and
+        then re-enqueued for settlement — in that order, because the
+        settlement engine skips any transaction that is not `pending`.
+
+        Decisions are terminal: approving an already-decided review returns
+        `409 REVIEW_ALREADY_DECIDED`, which is what stops two reviewers from
+        releasing the same payment twice.
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                  description: "Reviewer notes recorded on the audit trail"
+      responses:
+        "200":
+          description: "Review approved and transfer released"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplianceReview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: "Compliance review not found"
+        "409":
+          description: "Review has already been decided"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "REVIEW_ALREADY_DECIDED"
+                  message: "compliance review has already been decided"
+
+  /v1/admin/compliance/reviews/{id}/reject:
+    post:
+      operationId: rejectComplianceReview
+      summary: "Reject a held transfer"
+      description: |
+        Rejects a held transfer. The transaction is marked `failed` and is
+        never enqueued for settlement.
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+      responses:
+        "200":
+          description: "Review rejected"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplianceReview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: "Compliance review not found"
+        "409":
+          description: "Review has already been decided"
+
+  /v1/admin/compliance/sanctions-status:
+    get:
+      operationId: getSanctionsStatus
+      summary: "Get sanctions list status"
+      description: |
+        Reports the state of the in-memory OFAC SDN set and the outcome of the
+        last refresh. `loaded: false` means screening is failing closed and
+        every transfer is being held for review.
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      responses:
+        "200":
+          description: "Sanctions list status"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SanctionsStatus"
+              example:
+                loaded: true
+                entity_count: 17423
+                address_count: 621
+                name_count: 16802
+                updated_at: "2026-01-15T03:00:12Z"
+                last_refresh:
+                  status: "success"
+                  entity_count: 17423
+                  duration_ms: 8412
+                  finished_at: "2026-01-15T03:00:12Z"
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Components
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1225,6 +1432,7 @@ components:
       description: "Webhook endpoint ID"
 
   # ── Reusable Responses ──────────────────────────────────────────────────
+
   responses:
     BadRequest:
       description: "Bad request"
@@ -1277,6 +1485,78 @@ components:
 
   # ── Schemas ─────────────────────────────────────────────────────────────
   schemas:
+    ComplianceReview:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        transaction_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: ["pending", "approved", "rejected"]
+        risk_score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        rules_fired:
+          type: array
+          items:
+            type: string
+            enum:
+              - "sanctions_address_match"
+              - "sanctions_name_match"
+              - "sanctions_name_fuzzy_match"
+              - "velocity_burst"
+              - "structuring"
+              - "round_trip"
+              - "screener_error"
+        reason:
+          type: string
+        reviewed_by:
+          type: string
+          description: "Empty for approvals made with API-key authentication, which carries no user identity."
+        review_notes:
+          type: string
+        reviewed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    SanctionsStatus:
+      type: object
+      properties:
+        loaded:
+          type: boolean
+          description: "False means screening is failing closed and holding every transfer."
+        entity_count:
+          type: integer
+        address_count:
+          type: integer
+        name_count:
+          type: integer
+        updated_at:
+          type: string
+          format: date-time
+        last_refresh:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: ["success", "failed"]
+            entity_count:
+              type: integer
+            duration_ms:
+              type: integer
+            error:
+              type: string
+            finished_at:
+              type: string
+              format: date-time
 
     # ── Error ────────────────────────────────────────────────────────────
     ErrorResponse:

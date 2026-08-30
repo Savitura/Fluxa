@@ -42,6 +42,14 @@ type Config struct {
 	YellowCardAPIKey            string
 	YellowCardWebhookKey        string
 	YellowCardSandbox           bool
+	ComplianceEnabled           bool
+	OFACSDNURL                  string
+	ComplianceStructuringUnit   string
+	ComplianceVelocityMax       int
+	ComplianceVelocityWindowMin int
+	ComplianceRoundTripMin      int
+	ComplianceFuzzyThreshold    int
+	ComplianceReloadMinutes     int
 	WorkerEnabled               bool
 }
 
@@ -70,6 +78,14 @@ func Load() (*Config, error) {
 	viper.SetDefault("CONTRACT_WALLET_WINDOW_SECONDS", "86400")
 	viper.SetDefault("CONTRACT_WALLET_RECOVERY_THRESHOLD", "2")
 	viper.SetDefault("YELLOW_CARD_SANDBOX", "true")
+	viper.SetDefault("COMPLIANCE_ENABLED", "true")
+	viper.SetDefault("OFAC_SDN_URL", "https://sanctionslistservice.ofac.treas.gov/api/download/sdn.xml")
+	viper.SetDefault("COMPLIANCE_STRUCTURING_UNIT", "1000")
+	viper.SetDefault("COMPLIANCE_VELOCITY_MAX_TRANSFERS", "10")
+	viper.SetDefault("COMPLIANCE_VELOCITY_WINDOW_MINUTES", "10")
+	viper.SetDefault("COMPLIANCE_ROUND_TRIP_WINDOW_MINUTES", "60")
+	viper.SetDefault("COMPLIANCE_FUZZY_THRESHOLD", "2")
+	viper.SetDefault("COMPLIANCE_RELOAD_MINUTES", "15")
 	viper.SetDefault("WORKER_ENABLED", "true")
 
 	viper.SetConfigFile(".env")
@@ -101,6 +117,7 @@ func Load() (*Config, error) {
 	}
 
 	ycSandbox, _ := strconv.ParseBool(viper.GetString("YELLOW_CARD_SANDBOX"))
+	complianceEnabled, _ := strconv.ParseBool(viper.GetString("COMPLIANCE_ENABLED"))
 	workerEnabled, _ := strconv.ParseBool(viper.GetString("WORKER_ENABLED"))
 
 	return &Config{
@@ -136,6 +153,14 @@ func Load() (*Config, error) {
 		YellowCardAPIKey:            viper.GetString("YELLOW_CARD_API_KEY"),
 		YellowCardWebhookKey:        viper.GetString("YELLOW_CARD_WEBHOOK_KEY"),
 		YellowCardSandbox:           ycSandbox,
+		ComplianceEnabled:           complianceEnabled,
+		OFACSDNURL:                  viper.GetString("OFAC_SDN_URL"),
+		ComplianceStructuringUnit:   viper.GetString("COMPLIANCE_STRUCTURING_UNIT"),
+		ComplianceVelocityMax:       viper.GetInt("COMPLIANCE_VELOCITY_MAX_TRANSFERS"),
+		ComplianceVelocityWindowMin: viper.GetInt("COMPLIANCE_VELOCITY_WINDOW_MINUTES"),
+		ComplianceRoundTripMin:      viper.GetInt("COMPLIANCE_ROUND_TRIP_WINDOW_MINUTES"),
+		ComplianceFuzzyThreshold:    viper.GetInt("COMPLIANCE_FUZZY_THRESHOLD"),
+		ComplianceReloadMinutes:     viper.GetInt("COMPLIANCE_RELOAD_MINUTES"),
 		WorkerEnabled:               workerEnabled,
 	}, nil
 }

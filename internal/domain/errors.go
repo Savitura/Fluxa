@@ -42,6 +42,10 @@ var (
 	ErrNoContractSigner          = errors.New("no signer configured for contract wallet invocations")
 	ErrContractWasmNotConfigured = errors.New("contract wallet wasm hash is not configured")
 	ErrTrustlineNotApplicable    = errors.New("contract wallets do not use trustlines")
+
+	ErrTransferBlockedSanctions = errors.New("transfer blocked: destination matches a sanctions list entry")
+	ErrComplianceReviewNotFound = errors.New("compliance review not found")
+	ErrReviewNotPending         = errors.New("compliance review has already been decided")
 )
 
 type ErrNoTrustline struct {

@@ -120,7 +120,6 @@ func (r *TransactionRepo) GetByIdempotencyKey(ctx context.Context, orgID, idempo
 	var tenantID *string
 	var batchID *string
 	var reference string
-	var localAmt *string
 
 	query := `SELECT id, COALESCE(tx_hash,''), type, status,
 		        COALESCE(from_wallet::text,''), COALESCE(to_wallet::text,''),
@@ -265,7 +264,9 @@ func (r *TransactionRepo) ListByBatch(ctx context.Context, batchID string) ([]*d
 	query := `SELECT id, COALESCE(tx_hash,''), type, status,
 		        COALESCE(from_wallet::text,''), COALESCE(to_wallet::text,''),
 		        asset, amount, COALESCE(fee,'0'), fee_bps, tenant_id, created_at,
-		        COALESCE(requeue_count, 0), reconciled_at, batch_id, COALESCE(reference,'')
+		        COALESCE(requeue_count, 0), reconciled_at,
+		        fiat_rail, fiat_provider_ref, fiat_status, local_currency, local_amount,
+		        batch_id, COALESCE(reference,'')
 		 FROM transactions WHERE batch_id = $1`
 	args := []interface{}{batchID}
 	if tID != "" {
@@ -714,9 +715,20 @@ func (r *TransactionRepo) CreateWithMonthlyLimit(ctx context.Context, tx *domain
 	startDate := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
 	endDate := startDate.AddDate(0, 1, 0)
 
+	// Serialize concurrent transfers for this tenant by locking its row first.
+	// The count and the insert must be atomic or two requests can both observe
+	// count == limit-1 and both insert, overshooting the quota. PostgreSQL
+	// rejects FOR UPDATE on an aggregate, so the lock is taken on the tenant
+	// row rather than on the counted rows; it is released on commit/rollback.
+	var locked int
+	err = dbTx.QueryRow(ctx, `SELECT 1 FROM tenants WHERE id = $1 FOR UPDATE`, tenantID).Scan(&locked)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("lock tenant for limit check: %w", err)
+	}
+
 	var count int
 	err = dbTx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM transactions WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3 FOR UPDATE`,
+		`SELECT COUNT(*) FROM transactions WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3`,
 		tenantID, startDate, endDate,
 	).Scan(&count)
 	if err != nil {

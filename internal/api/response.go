@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/rs/zerolog/log"
 )
 
 type errorResponse struct {
@@ -42,6 +43,9 @@ func UnprocessableEntity(w http.ResponseWriter, code, message string) {
 }
 
 func InternalError(w http.ResponseWriter, err error) {
+	// The client deliberately gets an opaque message, but the cause has to go
+	// somewhere — without this an unexpected failure leaves no trace at all.
+	log.Error().Err(err).Msg("api: unhandled internal error")
 	Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an unexpected error occurred")
 }
 
@@ -81,6 +85,16 @@ func HandleDomainError(w http.ResponseWriter, err error) {
 		Error(w, http.StatusBadRequest, "INSUFFICIENT_SWEEPABLE_BALANCE", err.Error())
 	case errors.Is(err, domain.ErrTreasuryConfigNotFound):
 		NotFound(w, err.Error())
+	case errors.Is(err, domain.ErrComplianceReviewNotFound):
+		NotFound(w, err.Error())
+	case errors.Is(err, domain.ErrReviewNotPending):
+		Error(w, http.StatusConflict, "REVIEW_ALREADY_DECIDED", err.Error())
+	// Sanctions blocks get their own 403 code rather than the generic
+	// FORBIDDEN above: callers must be able to tell "you may not do this"
+	// from "this counterparty is sanctioned", and the latter is terminal —
+	// retrying with the same destination will always fail.
+	case errors.Is(err, domain.ErrTransferBlockedSanctions):
+		Error(w, http.StatusForbidden, "TRANSFER_BLOCKED_SANCTIONS", err.Error())
 	default:
 		InternalError(w, err)
 	}

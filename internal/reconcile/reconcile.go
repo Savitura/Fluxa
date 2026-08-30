@@ -590,6 +590,20 @@ func (s *Service) RecoverPending(ctx context.Context) error {
 	log.Info().Int("count", len(txes)).Msg("reconcile: recovering stuck pending transactions")
 
 	for _, tx := range txes {
+		// Defence in depth, and checked first so no later branch can act on a
+		// held transfer. GetStuckPendingTxes selects pending rows and
+		// submitted-without-hash rows, so a compliance_hold row should never
+		// appear here — but such a transfer is waiting on a human, not stuck,
+		// and re-enqueuing one would release a payment compliance
+		// deliberately stopped. Re-asserting the invariant here keeps it
+		// testable and means a future widening of that query cannot quietly
+		// become a compliance bypass.
+		if tx.Status == domain.StatusComplianceHold {
+			log.Warn().Str("tx_id", tx.ID).
+				Msg("reconcile: skipping transaction held for compliance review")
+			continue
+		}
+
 		if tx.Status == domain.StatusSubmitted {
 			// This row was claimed by a worker that crashed before it could
 			// record a tx_hash — nothing may have reached the network. Reset

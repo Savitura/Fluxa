@@ -88,15 +88,15 @@ func (p *Provider) GetQuote(ctx context.Context, req fiat.QuoteRequest) (*fiat.F
 
 	var result struct {
 		Rate struct {
-			ID              string `json:"id"`
-			SourceAmount    string `json:"source_amount"`
+			ID                string `json:"id"`
+			SourceAmount      string `json:"source_amount"`
 			DestinationAmount string `json:"destination_amount"`
-			Rate            string `json:"rate"`
-			Fee             string `json:"fee"`
-			ExpiresAt       string `json:"expires_at"`
-			Side            string `json:"side"`
-			SourceCurrency  string `json:"source_currency"`
-			DestCurrency    string `json:"destination_currency"`
+			Rate              string `json:"rate"`
+			Fee               string `json:"fee"`
+			ExpiresAt         string `json:"expires_at"`
+			Side              string `json:"side"`
+			SourceCurrency    string `json:"source_currency"`
+			DestCurrency      string `json:"destination_currency"`
 		} `json:"rate"`
 	}
 
@@ -164,10 +164,10 @@ func (p *Provider) InitiateDeposit(ctx context.Context, req fiat.DepositRequest)
 
 	var result struct {
 		Payment struct {
-			ID              string `json:"id"`
-			Reference       string `json:"reference"`
-			Status          string `json:"status"`
-			Instructions    struct {
+			ID           string `json:"id"`
+			Reference    string `json:"reference"`
+			Status       string `json:"status"`
+			Instructions struct {
 				BankName      string `json:"bank_name"`
 				AccountNumber string `json:"account_number"`
 				AccountName   string `json:"account_name"`
@@ -307,11 +307,11 @@ func (p *Provider) GetStatus(ctx context.Context, providerRef string) (*fiat.Rai
 
 	var result struct {
 		Transaction struct {
-			ID        string `json:"id"`
-			Type      string `json:"type"`
-			Status    string `json:"status"`
-			Amount    string `json:"amount"`
-			Currency  string `json:"currency"`
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Status   string `json:"status"`
+			Amount   string `json:"amount"`
+			Currency string `json:"currency"`
 		} `json:"transaction"`
 	}
 

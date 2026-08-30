@@ -63,7 +63,7 @@ type service struct {
 	auditRepo      FXQuoteAuditRepo
 	feeSvc         fees.Service
 	stellar        stellar.Client
-	redis          *redis.Client
+	redis          redis.UniversalClient
 	rateCache      *RateCache
 	usdcIssuer     string
 	providers      []Provider
@@ -92,7 +92,7 @@ func NewService(
 	auditRepo FXQuoteAuditRepo,
 	feeSvc fees.Service,
 	stellarClient stellar.Client,
-	redisClient *redis.Client,
+	redisClient redis.UniversalClient,
 	usdcIssuer string,
 	providers []Provider,
 	spreadBps int,

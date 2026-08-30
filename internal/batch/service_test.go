@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/stellar"
+	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -131,6 +133,14 @@ func (f *fakeTransferSvc) InitiateBatchTransfer(ctx context.Context, fromID, toI
 	}
 	_ = f.txRepo.Create(ctx, tx)
 	return tx, nil
+}
+
+func (f *fakeTransferSvc) WithScreener(_ transfer.Screener) transfer.Service {
+	return f
+}
+
+func (f *fakeTransferSvc) WithStellarClient(_ stellar.Client) transfer.Service {
+	return f
 }
 
 func (f *fakeTransferSvc) GetTransaction(_ context.Context, id string) (*domain.Transaction, error) {

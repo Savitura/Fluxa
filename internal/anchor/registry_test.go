@@ -72,10 +72,10 @@ func (f *fakeRepo) GetAnchorByHomeDomain(ctx context.Context, homeDomain string)
 func (f *fakeRepo) CreateTransaction(ctx context.Context, t *domain.AnchorTransaction) error {
 	return nil
 }
-func (f *fakeRepo) GetTransactionByID(ctx context.Context, id string) (*domain.AnchorTransaction, error) {
+func (f *fakeRepo) GetTransactionByID(ctx context.Context, id string, tenantID *string) (*domain.AnchorTransaction, error) {
 	return nil, nil
 }
-func (f *fakeRepo) UpdateTransactionStatus(ctx context.Context, id, status string, completedAt *time.Time) error {
+func (f *fakeRepo) UpdateTransactionStatus(ctx context.Context, id, status string, completedAt *time.Time, tenantID *string) error {
 	return nil
 }
 
