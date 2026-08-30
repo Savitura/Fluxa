@@ -9,16 +9,23 @@ import (
 	"golang.org/x/time/rate"
 )
 
+const maxIdleTime = 5 * time.Minute
+
+type visitorEntry struct {
+	rateLimiter *rate.Limiter
+	lastSeen    time.Time
+}
+
 type rateLimiter struct {
 	mu       sync.Mutex
-	visitors map[string]*rate.Limiter
+	visitors map[string]*visitorEntry
 	rate     rate.Limit
 	burst    int
 }
 
 func newRateLimiter(rps float64, burst int) *rateLimiter {
 	rl := &rateLimiter{
-		visitors: make(map[string]*rate.Limiter),
+		visitors: make(map[string]*visitorEntry),
 		rate:     rate.Limit(rps),
 		burst:    burst,
 	}
@@ -30,12 +37,17 @@ func (rl *rateLimiter) getLimiter(key string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	limiter, exists := rl.visitors[key]
+	entry, exists := rl.visitors[key]
 	if !exists {
-		limiter = rate.NewLimiter(rl.rate, rl.burst)
-		rl.visitors[key] = limiter
+		entry = &visitorEntry{
+			rateLimiter: rate.NewLimiter(rl.rate, rl.burst),
+			lastSeen:    time.Now(),
+		}
+		rl.visitors[key] = entry
+	} else {
+		entry.lastSeen = time.Now()
 	}
-	return limiter
+	return entry.rateLimiter
 }
 
 func (rl *rateLimiter) cleanup() {
@@ -43,8 +55,9 @@ func (rl *rateLimiter) cleanup() {
 	defer ticker.Stop()
 	for range ticker.C {
 		rl.mu.Lock()
-		for key, limiter := range rl.visitors {
-			if limiter.TokensAt(time.Now()) == 0 {
+		now := time.Now()
+		for key, entry := range rl.visitors {
+			if now.Sub(entry.lastSeen) > maxIdleTime {
 				delete(rl.visitors, key)
 			}
 		}
