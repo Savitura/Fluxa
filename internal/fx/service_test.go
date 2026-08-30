@@ -546,6 +546,61 @@ func TestExecuteConversion_WalletNilTenantID(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Active pair eviction tests
+// ---------------------------------------------------------------------------
+
+func TestEvictStalePairs_RemovesOnlyStaleEntries(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mr.Close()
+
+	svc := setupService(t, mr).(*service)
+	svc.registerActivePair("USDC:XLM")
+	svc.registerActivePair("XLM:USDC")
+
+	// Backdate one pair so it looks idle beyond maxAge.
+	svc.activePairsMu.Lock()
+	svc.activePairs["USDC:XLM"] = time.Now().Add(-1 * time.Hour)
+	svc.activePairsMu.Unlock()
+
+	svc.evictStalePairs(10 * time.Minute)
+
+	svc.activePairsMu.RLock()
+	defer svc.activePairsMu.RUnlock()
+	if _, ok := svc.activePairs["USDC:XLM"]; ok {
+		t.Error("expected stale pair USDC:XLM to be evicted")
+	}
+	if _, ok := svc.activePairs["XLM:USDC"]; !ok {
+		t.Error("expected recently queried pair XLM:USDC to be retained")
+	}
+}
+
+func TestRegisterActivePair_RefreshesLastQueried(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mr.Close()
+
+	svc := setupService(t, mr).(*service)
+	svc.activePairsMu.Lock()
+	svc.activePairs["USDC:XLM"] = time.Now().Add(-1 * time.Hour)
+	svc.activePairsMu.Unlock()
+
+	svc.registerActivePair("USDC:XLM")
+
+	svc.evictStalePairs(10 * time.Minute)
+
+	svc.activePairsMu.RLock()
+	defer svc.activePairsMu.RUnlock()
+	if _, ok := svc.activePairs["USDC:XLM"]; !ok {
+		t.Error("expected re-registered pair to survive eviction")
+	}
+}
+
 func TestExecuteConversion_QuoteNotFoundInRedis(t *testing.T) {
 	mr, err := miniredis.Run()
 	if err != nil {
