@@ -248,7 +248,7 @@ func (e *Engine) buildAsset(code string) (txnbuild.Asset, error) {
 		return txnbuild.NativeAsset{}, nil
 	}
 	issuer, ok := e.assetIssuers[code]
-	if !ok {
+	if !ok || issuer == "" {
 		return nil, fmt.Errorf("%w: %s", domain.ErrInvalidAsset, code)
 	}
 	return txnbuild.CreditAsset{Code: code, Issuer: issuer}, nil
