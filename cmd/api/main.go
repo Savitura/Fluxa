@@ -129,7 +129,8 @@ func main() {
 
 	jwtSecretBytes := []byte(cfg.JWTSecret)
 
-	authSvc := auth.NewService(userRepo, tenantRepo, orgRepo, jwtSecretBytes)
+	refreshTokenRepo := postgres.NewRefreshTokenRepo(repoDB)
+	authSvc := auth.NewService(userRepo, tenantRepo, orgRepo, refreshTokenRepo, jwtSecretBytes)
 	orgSvc := org.NewService(orgRepo, userRepo, tenantRepo, jwtSecretBytes)
 
 	feeSvc := fees.NewService(feeRepo)
