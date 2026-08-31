@@ -74,6 +74,9 @@ func TestBuildAsset_Unsupported(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported asset, got nil")
 	}
+	if !errors.Is(err, domain.ErrInvalidAsset) {
+		t.Fatalf("expected ErrInvalidAsset, got %v", err)
+	}
 }
 
 func TestBuildAsset_EmptyRegistry(t *testing.T) {
@@ -81,6 +84,20 @@ func TestBuildAsset_EmptyRegistry(t *testing.T) {
 	_, err := e.buildAsset("USDC")
 	if err == nil {
 		t.Fatal("expected error for USDC with empty registry, got nil")
+	}
+	if !errors.Is(err, domain.ErrInvalidAsset) {
+		t.Fatalf("expected ErrInvalidAsset, got %v", err)
+	}
+}
+
+func TestBuildAsset_EmptyIssuer(t *testing.T) {
+	e := &Engine{assetIssuers: map[string]string{"USDC": ""}}
+	_, err := e.buildAsset("USDC")
+	if err == nil {
+		t.Fatal("expected error for USDC with empty issuer string, got nil")
+	}
+	if !errors.Is(err, domain.ErrInvalidAsset) {
+		t.Fatalf("expected ErrInvalidAsset, got %v", err)
 	}
 }
 
