@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/queue"
@@ -161,6 +162,7 @@ func (s *service) Dispatch(ctx context.Context, eventType domain.EventType, payl
 	if err != nil {
 		return fmt.Errorf("marshal event payload: %w", err)
 	}
+	body = truncatePayload(body)
 
 	for _, ep := range endpoints {
 		delivery := &domain.WebhookDelivery{
@@ -255,6 +257,36 @@ func (s *service) loadDelivery(ctx context.Context, deliveryID string) (*domain.
 		return nil, nil, fmt.Errorf("load endpoint: %w", err)
 	}
 	return delivery, ep, nil
+}
+
+// maxPayloadSize is the upper limit (in bytes) for a stored webhook payload.
+// Payloads exceeding this are truncated at a UTF-8 character boundary and
+// marked with a suffix so consumers know data was cut.
+const maxPayloadSize = 64 * 1024 // 64 KiB
+
+// truncationMarker is appended when a payload is truncated.
+var truncationMarker = []byte("\n...[truncated]")
+
+// truncatePayload returns body unchanged when it fits within maxPayloadSize.
+// When it exceeds the limit, the payload is truncated at the nearest valid
+// UTF-8 character boundary before the limit and a truncation marker is
+// appended. The result is always valid UTF-8.
+func truncatePayload(body []byte) []byte {
+	if len(body) <= maxPayloadSize {
+		return body
+	}
+	limit := maxPayloadSize - len(truncationMarker)
+	if limit < 0 {
+		limit = 0
+	}
+	// Walk backward to a valid UTF-8 boundary.
+	for limit > 0 && !utf8.RuneStart(body[limit]) {
+		limit--
+	}
+	result := make([]byte, 0, maxPayloadSize)
+	result = append(result, body[:limit]...)
+	result = append(result, truncationMarker...)
+	return result
 }
 
 // sign computes the delivery signature over `timestamp + "." + payload`

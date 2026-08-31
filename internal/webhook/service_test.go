@@ -1,12 +1,14 @@
 package webhook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fluxa/fluxa/internal/domain"
 )
@@ -245,5 +247,129 @@ func TestDispatch_FiltersByEvent(t *testing.T) {
 		if d.EndpointID == ep.ID {
 			t.Fatal("delivery should not have been created for unsubscribed event")
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// truncatePayload tests
+// ---------------------------------------------------------------------------
+
+func TestTruncatePayload_SmallPayloadUntouched(t *testing.T) {
+	in := []byte(`{"event":"transfer.settled","id":"tx-1"}`)
+	out := truncatePayload(in)
+	if string(out) != string(in) {
+		t.Fatalf("small payload was modified: got %q", out)
+	}
+}
+
+func TestTruncatePayload_ExactLimitUntouched(t *testing.T) {
+	in := make([]byte, maxPayloadSize)
+	for i := range in {
+		in[i] = 'A'
+	}
+	out := truncatePayload(in)
+	if len(out) != maxPayloadSize {
+		t.Fatalf("exact-limit payload was resized: got %d bytes, want %d", len(out), maxPayloadSize)
+	}
+}
+
+func TestTruncatePayload_LargePayloadTruncated(t *testing.T) {
+	in := make([]byte, maxPayloadSize+1000)
+	for i := range in {
+		in[i] = 'B'
+	}
+	out := truncatePayload(in)
+	if len(out) != maxPayloadSize {
+		t.Fatalf("truncated payload size = %d, want %d", len(out), maxPayloadSize)
+	}
+	if !bytes.HasSuffix(out, truncationMarker) {
+		t.Fatalf("truncated payload does not end with marker: %q", out[len(out)-30:])
+	}
+}
+
+func TestTruncatePayload_RespectsUTF8Boundaries(t *testing.T) {
+	// Build a payload with multi-byte UTF-8 characters at the boundary.
+	// "€" is 3 bytes (0xE2 0x82 0xAC). Place one straddling the limit.
+	base := make([]byte, maxPayloadSize-1)
+	for i := range base {
+		base[i] = 'C'
+	}
+	// Append a 3-byte character that would straddle the boundary.
+	in := append(base, []byte("€")...) // total = maxPayloadSize + 2
+	out := truncatePayload(in)
+	if len(out) != maxPayloadSize {
+		t.Fatalf("UTF-8 truncated payload size = %d, want %d", len(out), maxPayloadSize)
+	}
+	if !bytes.HasSuffix(out, truncationMarker) {
+		t.Fatalf("missing truncation marker")
+	}
+	// The body before the marker should be valid UTF-8.
+	body := out[:len(out)-len(truncationMarker)]
+	if !utf8.Valid(body) {
+		t.Fatal("truncated body is not valid UTF-8")
+	}
+}
+
+func TestTruncatePayload_EmojiAtBoundary(t *testing.T) {
+	// "🎉" is 4 bytes. Build payload so it straddles the limit.
+	base := make([]byte, maxPayloadSize-2)
+	for i := range base {
+		base[i] = 'D'
+	}
+	in := append(base, []byte("🎉")...) // total = maxPayloadSize + 2
+	out := truncatePayload(in)
+	if len(out) != maxPayloadSize {
+		t.Fatalf("emoji truncated payload size = %d, want %d", len(out), maxPayloadSize)
+	}
+	body := out[:len(out)-len(truncationMarker)]
+	if !utf8.Valid(body) {
+		t.Fatal("truncated body is not valid UTF-8")
+	}
+}
+
+func TestTruncatePayload_JsonWithBinaryData(t *testing.T) {
+	// Simulate a JSON payload containing base64-encoded binary data
+	// (like serialized ScVal bytes) that exceeds the limit.
+	binaryData := make([]byte, maxPayloadSize)
+	for i := range binaryData {
+		binaryData[i] = byte(i % 256)
+	}
+	payload := map[string]interface{}{
+		"event":    "transfer.settled",
+		"raw_data": string(binaryData),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	out := truncatePayload(body)
+	if len(out) > maxPayloadSize {
+		t.Fatalf("payload too large after truncation: %d bytes", len(out))
+	}
+	if !bytes.HasSuffix(out, truncationMarker) {
+		t.Fatal("missing truncation marker")
+	}
+}
+
+func TestTruncatePayload_AllMultiByte(t *testing.T) {
+	// Payload made entirely of 3-byte UTF-8 characters ("€").
+	// Ensure truncation never splits a character. The result may be slightly
+	// smaller than maxPayloadSize because we round down to a character boundary.
+	char := []byte("€") // 3 bytes
+	count := (maxPayloadSize / len(char)) + 10
+	in := make([]byte, 0, count*len(char))
+	for i := 0; i < count; i++ {
+		in = append(in, char...)
+	}
+	out := truncatePayload(in)
+	if len(out) > maxPayloadSize {
+		t.Fatalf("all-multibyte truncated size = %d, exceeds max %d", len(out), maxPayloadSize)
+	}
+	if len(out) <= len(truncationMarker) {
+		t.Fatalf("truncated payload too small: %d bytes", len(out))
+	}
+	body := out[:len(out)-len(truncationMarker)]
+	if !utf8.Valid(body) {
+		t.Fatal("truncated body contains invalid UTF-8")
 	}
 }
