@@ -56,6 +56,7 @@ func New(
 	port string,
 	healthChecks map[string]DependencyCheck,
 	membershipValidator MembershipValidator,
+	corsOrigins []string,
 ) *Server {
 	r := chi.NewRouter()
 
@@ -63,7 +64,7 @@ func New(
 	r.Use(requestID)
 	r.Use(logger)
 	r.Use(recoverer)
-	r.Use(CORS)
+	r.Use(CORS(corsOrigins))
 	r.Use(MaxBodySize(1 << 20))
 	r.Use(MetricsMiddleware)
 
@@ -97,10 +98,11 @@ func New(
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
 					"request_count":   0,
-					"transfer_volume": "0",
-					"rate_limit":      100,
+						"transfer_volume": "0",
+						"rate_limit":      100,
 					"period":          "current",
 					"note":            "derived on client — backend usage aggregation not yet implemented",
+					},
 				})
 			})
 

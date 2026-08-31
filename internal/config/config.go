@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	Port                        string
+	CORSAllowedOrigins          []string
 	Env                         string
 	DatabaseURL                 string
 	ReplicaDatabaseURL          string
@@ -67,6 +68,7 @@ func Load() (*Config, error) {
 	viper.AutomaticEnv()
 
 	viper.SetDefault("PORT", "3000")
+	viper.SetDefault("CORS_ALLOWED_ORIGINS", "localhost:*")
 	viper.SetDefault("ENV", "development")
 	viper.SetDefault("STELLAR_NETWORK", "testnet")
 	viper.SetDefault("STELLAR_HORIZON_URL", "https://horizon-testnet.stellar.org")
@@ -122,6 +124,7 @@ func Load() (*Config, error) {
 
 	return &Config{
 		Port:                        viper.GetString("PORT"),
+		CORSAllowedOrigins:          splitCSV(viper.GetString("CORS_ALLOWED_ORIGINS")),
 		Env:                         env,
 		DatabaseURL:                 viper.GetString("DATABASE_URL"),
 		ReplicaDatabaseURL:          viper.GetString("REPLICA_DATABASE_URL"),

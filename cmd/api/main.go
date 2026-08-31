@@ -329,6 +329,7 @@ func main() {
 		},
 
 		orgRepo,
+		cfg.CORSAllowedOrigins,
 	)
 
 	quit := make(chan os.Signal, 1)
