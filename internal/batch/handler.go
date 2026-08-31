@@ -9,8 +9,16 @@ import (
 	"github.com/fluxa/fluxa/internal/api"
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
+
+// idempotencyKeyHeader mirrors the header name used by
+// internal/server/idempotency, duplicated here (rather than exported from
+// that package) because it is only needed to decide whether this handler
+// must supply a server-generated key before delegating to the shared
+// middleware.
+const idempotencyKeyHeader = "Idempotency-Key"
 
 type Handler struct {
 	svc              Service
@@ -23,7 +31,12 @@ func NewHandler(svc Service) *Handler {
 }
 
 // WithIdempotency attaches the idempotency-key middleware to the
-// state-mutating route (POST /) only.
+// state-mutating route (POST /) only. Unlike the single-transfer endpoints
+// (wallet, transfer, fx) that require the caller to supply the key, batch
+// submissions treat it as optional: ensureIdempotencyKey generates one
+// server-side when absent so the shared middleware always has a key to work
+// with, while a request with no key still succeeds normally instead of
+// being rejected.
 func (h *Handler) WithIdempotency(mw func(http.Handler) http.Handler) *Handler {
 	h.idem = mw
 	return h
@@ -42,12 +55,26 @@ func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		post := r.Post
 		if h.idem != nil {
-			post = r.With(h.idem).Post
+			post = r.With(ensureIdempotencyKey, h.idem).Post
 		}
 		post("/", h.createBatch)
 		r.Get("/{batchId}", h.getBatch)
 		r.Get("/{batchId}/export", h.exportBatch)
 	}
+}
+
+// ensureIdempotencyKey generates a server-side UUID v4 idempotency key for
+// batch requests that don't supply one, so the header stays optional for
+// this endpoint: a caller that skips it still gets normal, non-deduplicated
+// processing, while a caller that supplies a key still gets the duplicate
+// detection implemented by the shared idempotency middleware.
+func ensureIdempotencyKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(idempotencyKeyHeader) == "" {
+			r.Header.Set(idempotencyKeyHeader, uuid.New().String())
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type batchItemRequest struct {

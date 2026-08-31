@@ -2,276 +2,181 @@ package batch
 
 import (
 	"bytes"
-	"encoding/json"
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/server/idempotency"
+	"github.com/fluxa/fluxa/internal/tenant"
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
-// supportedAssets is a test asset registry.
-var supportedAssets = map[string]bool{
-	"XLM":  true,
-	"USDC": true,
-	"EURC": true,
+// fakeService implements Service, counting how many times CreateBatch
+// actually runs so tests can tell a replayed idempotent response apart from
+// a reprocessed one.
+type fakeService struct {
+	mu         sync.Mutex
+	createHits int
 }
 
-// testValidationError matches the JSON shape returned by the API.
-type testValidationError struct {
-	Row    int    `json:"row"`
-	Field  string `json:"field"`
-	Value  string `json:"value"`
-	Reason string `json:"reason"`
+func (f *fakeService) CreateBatch(_ context.Context, fromWalletID string, items []Item) (*Result, error) {
+	f.mu.Lock()
+	f.createHits++
+	f.mu.Unlock()
+
+	now := time.Now().UTC()
+	return &Result{
+		Batch: &domain.Batch{
+			ID:         "batch-1",
+			Status:     domain.BatchStatusPending,
+			TotalCount: len(items),
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		},
+	}, nil
 }
 
-// testErrorResponse matches the error envelope returned by the API.
-type testErrorResponse struct {
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-	ValidationErrors []testValidationError `json:"validation_errors"`
+func (f *fakeService) GetBatch(_ context.Context, id string) (*Result, error) {
+	return nil, domain.ErrBatchNotFound
 }
 
-func TestCreateBatch_AllValidAssets_Succeeds(t *testing.T) {
-	txRepo := newFakeTxRepo()
-	transferSvc := &fakeTransferSvc{txRepo: txRepo, failOn: map[string]bool{}}
-	svc := NewService(newFakeBatchRepo(), txRepo, transferSvc)
-	h := NewHandler(svc).WithAssetValidator(func(code string) bool {
-		return supportedAssets[code]
-	})
+func (f *fakeService) ExportCSV(_ context.Context, id string) (string, error) {
+	return "", domain.ErrBatchNotFound
+}
 
-	body := `{
-		"from_wallet_id": "550e8400-e29b-41d4-a716-446655440000",
-		"transfers": [
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440001", "asset": "XLM", "amount": "10.0000000"},
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440002", "asset": "USDC", "amount": "25.0000000"}
-		]
-	}`
+func (f *fakeService) hits() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.createHits
+}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/transfers/batch/", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
+// mockIdemRepo is a minimal in-memory idempotency.Repository, matching the
+// semantics exercised in internal/server/idempotency's own middleware
+// tests: the first TryAcquire for a (org, key) pair wins and starts
+// "processing"; later ones see that record until Complete overwrites it.
+type mockIdemRepo struct {
+	mu      sync.Mutex
+	records map[string]*idempotency.Record
+}
+
+func newMockIdemRepo() *mockIdemRepo {
+	return &mockIdemRepo{records: map[string]*idempotency.Record{}}
+}
+
+func (m *mockIdemRepo) TryAcquire(_ context.Context, orgID, key, requestHash string, _ time.Time) (*idempotency.Record, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := orgID + ":" + key
+	if rec, ok := m.records[k]; ok {
+		cp := *rec
+		return &cp, true, nil
+	}
+	m.records[k] = &idempotency.Record{OrgID: orgID, Key: key, RequestHash: requestHash, Status: idempotency.StatusProcessing}
+	return nil, false, nil
+}
+
+func (m *mockIdemRepo) Complete(_ context.Context, orgID, key string, responseStatus int, responseBody []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := orgID + ":" + key
+	rec, ok := m.records[k]
+	if !ok {
+		return nil
+	}
+	rec.Status = idempotency.StatusComplete
+	rec.ResponseStatus = responseStatus
+	rec.ResponseBody = responseBody
+	return nil
+}
+
+func newBatchRouter(svc Service, repo idempotency.Repository) http.Handler {
+	h := NewHandler(svc).WithIdempotency(idempotency.Middleware(repo))
+	r := chi.NewRouter()
+	r.Route("/", h.Routes())
+	return r
+}
+
+func newBatchRequest(t *testing.T, key string) *http.Request {
+	t.Helper()
+	body := `{"from_wallet_id":"11111111-1111-4111-8111-111111111111","transfers":[{"to_wallet_id":"22222222-2222-4222-8222-222222222222","asset":"USDC","amount":"10"}]}`
+	ctx := tenant.WithID(context.Background(), "org-1")
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body)).WithContext(ctx)
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
+	return req
+}
+
+func TestCreateBatchWithoutIdempotencyKeySucceeds(t *testing.T) {
+	svc := &fakeService{}
+	router := newBatchRouter(svc, newMockIdemRepo())
+
 	rec := httptest.NewRecorder()
-
-	h.createBatch(rec, req)
+	router.ServeHTTP(rec, newBatchRequest(t, ""))
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
 	}
-
-	var resp batchResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.TotalCount != 2 {
-		t.Fatalf("total_count = %d, want 2", resp.TotalCount)
-	}
-	if len(resp.ValidationErrors) != 0 {
-		t.Fatalf("expected no validation errors, got %d", len(resp.ValidationErrors))
+	if svc.hits() != 1 {
+		t.Fatalf("expected CreateBatch to run once, ran %d times", svc.hits())
 	}
 }
 
-func TestCreateBatch_InvalidAssetCode_Returns400WithValidationErrors(t *testing.T) {
-	txRepo := newFakeTxRepo()
-	transferSvc := &fakeTransferSvc{txRepo: txRepo, failOn: map[string]bool{}}
-	svc := NewService(newFakeBatchRepo(), txRepo, transferSvc)
-	h := NewHandler(svc).WithAssetValidator(func(code string) bool {
-		return supportedAssets[code]
-	})
+func TestCreateBatchWithoutIdempotencyKeyDoesNotDeduplicateAcrossRequests(t *testing.T) {
+	// Two independent submissions with no key are two independent server-
+	// generated keys, so both must reach the service normally rather than
+	// being treated as a retry of each other.
+	svc := &fakeService{}
+	router := newBatchRouter(svc, newMockIdemRepo())
 
-	body := `{
-		"from_wallet_id": "550e8400-e29b-41d4-a716-446655440000",
-		"transfers": [
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440001", "asset": "DOGE", "amount": "10.0000000"}
-		]
-	}`
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, newBatchRequest(t, ""))
+	second := httptest.NewRecorder()
+	router.ServeHTTP(second, newBatchRequest(t, ""))
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/transfers/batch/", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
+	if svc.hits() != 2 {
+		t.Fatalf("expected CreateBatch to run twice for two keyless requests, ran %d times", svc.hits())
+	}
+	if first.Code != http.StatusAccepted || second.Code != http.StatusAccepted {
+		t.Fatalf("expected both requests to succeed, got %d and %d", first.Code, second.Code)
+	}
+}
+
+func TestCreateBatchDuplicateKeyReplaysCachedResponseWithoutReprocessing(t *testing.T) {
+	svc := &fakeService{}
+	router := newBatchRouter(svc, newMockIdemRepo())
+	key := uuid.New().String()
+
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, newBatchRequest(t, key))
+	second := httptest.NewRecorder()
+	router.ServeHTTP(second, newBatchRequest(t, key))
+
+	if svc.hits() != 1 {
+		t.Fatalf("expected CreateBatch to run exactly once, ran %d times", svc.hits())
+	}
+	if first.Code != second.Code || first.Body.String() != second.Body.String() {
+		t.Fatalf("expected identical replayed response, got %d %q vs %d %q",
+			first.Code, first.Body.String(), second.Code, second.Body.String())
+	}
+}
+
+func TestCreateBatchInvalidIdempotencyKeyFormatIsRejected(t *testing.T) {
+	svc := &fakeService{}
+	router := newBatchRouter(svc, newMockIdemRepo())
+
 	rec := httptest.NewRecorder()
-
-	h.createBatch(rec, req)
+	router.ServeHTTP(rec, newBatchRequest(t, "not-a-uuid"))
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 400 for a malformed client-supplied key, got %d", rec.Code)
 	}
-
-	var resp testErrorResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.Error.Code != "BAD_REQUEST" {
-		t.Fatalf("error code = %q, want BAD_REQUEST", resp.Error.Code)
-	}
-	if len(resp.ValidationErrors) != 1 {
-		t.Fatalf("expected 1 validation error, got %d", len(resp.ValidationErrors))
-	}
-	ve := resp.ValidationErrors[0]
-	if ve.Row != 1 {
-		t.Fatalf("validation error row = %d, want 1", ve.Row)
-	}
-	if ve.Field != "asset" {
-		t.Fatalf("validation error field = %q, want asset", ve.Field)
-	}
-	if ve.Value != "DOGE" {
-		t.Fatalf("validation error value = %q, want DOGE", ve.Value)
-	}
-	if ve.Reason != "unsupported asset code" {
-		t.Fatalf("validation error reason = %q, want 'unsupported asset code'", ve.Reason)
-	}
-}
-
-func TestCreateBatch_MixOfValidAndInvalidAssets_ReturnsAllErrors(t *testing.T) {
-	txRepo := newFakeTxRepo()
-	transferSvc := &fakeTransferSvc{txRepo: txRepo, failOn: map[string]bool{}}
-	svc := NewService(newFakeBatchRepo(), txRepo, transferSvc)
-	h := NewHandler(svc).WithAssetValidator(func(code string) bool {
-		return supportedAssets[code]
-	})
-
-	body := `{
-		"from_wallet_id": "550e8400-e29b-41d4-a716-446655440000",
-		"transfers": [
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440001", "asset": "XLM", "amount": "10.0000000"},
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440002", "asset": "DOGE", "amount": "5.0000000"},
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440003", "asset": "SHIB", "amount": "100.0000000"},
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440004", "asset": "USDC", "amount": "50.0000000"}
-		]
-	}`
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/transfers/batch/", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	h.createBatch(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var resp testErrorResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp.ValidationErrors) != 2 {
-		t.Fatalf("expected 2 validation errors, got %d", len(resp.ValidationErrors))
-	}
-
-	// Row 2 (DOGE) and Row 3 (SHIB) should be flagged.
-	for _, ve := range resp.ValidationErrors {
-		if ve.Field != "asset" {
-			t.Errorf("expected field 'asset', got %q", ve.Field)
-		}
-		if ve.Reason != "unsupported asset code" {
-			t.Errorf("expected reason 'unsupported asset code', got %q", ve.Reason)
-		}
-	}
-}
-
-func TestCreateBatch_InvalidAssetCode_NoBatchCreated(t *testing.T) {
-	txRepo := newFakeTxRepo()
-	transferSvc := &fakeTransferSvc{txRepo: txRepo, failOn: map[string]bool{}}
-	batchRepo := newFakeBatchRepo()
-	svc := NewService(batchRepo, txRepo, transferSvc)
-	h := NewHandler(svc).WithAssetValidator(func(code string) bool {
-		return supportedAssets[code]
-	})
-
-	body := `{
-		"from_wallet_id": "550e8400-e29b-41d4-a716-446655440000",
-		"transfers": [
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440001", "asset": "DOGE", "amount": "10.0000000"}
-		]
-	}`
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/transfers/batch/", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	h.createBatch(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if len(batchRepo.batches) != 0 {
-		t.Fatalf("expected no batches created, got %d", len(batchRepo.batches))
-	}
-	if len(txRepo.byBatch) != 0 {
-		t.Fatalf("expected no transactions created, got %d", len(txRepo.byBatch))
-	}
-}
-
-func TestCreateBatch_NoAssetValidator_BypassesValidation(t *testing.T) {
-	txRepo := newFakeTxRepo()
-	transferSvc := &fakeTransferSvc{txRepo: txRepo, failOn: map[string]bool{}}
-	svc := NewService(newFakeBatchRepo(), txRepo, transferSvc)
-	// No WithAssetValidator — validation is skipped.
-	h := NewHandler(svc)
-
-	body := `{
-		"from_wallet_id": "550e8400-e29b-41d4-a716-446655440000",
-		"transfers": [
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440001", "asset": "DOGE", "amount": "10.0000000"}
-		]
-	}`
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/transfers/batch/", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	h.createBatch(rec, req)
-
-	// Without a validator, the batch is created even with an invalid asset.
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestCreateBatch_MultipleInvalidAssets_ReturnsCorrectRowNumbers(t *testing.T) {
-	txRepo := newFakeTxRepo()
-	transferSvc := &fakeTransferSvc{txRepo: txRepo, failOn: map[string]bool{}}
-	svc := NewService(newFakeBatchRepo(), txRepo, transferSvc)
-	h := NewHandler(svc).WithAssetValidator(func(code string) bool {
-		return supportedAssets[code]
-	})
-
-	body := `{
-		"from_wallet_id": "550e8400-e29b-41d4-a716-446655440000",
-		"transfers": [
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440001", "asset": "XLM", "amount": "10.0000000"},
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440002", "asset": "DOGE", "amount": "5.0000000"},
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440003", "asset": "XLM", "amount": "20.0000000"},
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440004", "asset": "PEPE", "amount": "1.0000000"},
-			{"to_wallet_id": "550e8400-e29b-41d4-a716-446655440005", "asset": "XLM", "amount": "30.0000000"}
-		]
-	}`
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/transfers/batch/", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	h.createBatch(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var resp testErrorResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp.ValidationErrors) != 2 {
-		t.Fatalf("expected 2 validation errors, got %d", len(resp.ValidationErrors))
-	}
-
-	// Row 2 = DOGE, Row 4 = PEPE
-	rows := map[int]string{}
-	for _, ve := range resp.ValidationErrors {
-		rows[ve.Row] = ve.Value
-	}
-	if rows[2] != "DOGE" {
-		t.Errorf("row 2 = %q, want DOGE", rows[2])
-	}
-	if rows[4] != "PEPE" {
-		t.Errorf("row 4 = %q, want PEPE", rows[4])
+	if svc.hits() != 0 {
+		t.Fatalf("expected CreateBatch not to run for a rejected key, ran %d times", svc.hits())
 	}
 }
