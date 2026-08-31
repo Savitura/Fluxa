@@ -187,51 +187,72 @@ func (s *service) Dispatch(ctx context.Context, eventType domain.EventType, payl
 
 // Deliver performs the actual HTTP POST for a delivery record.
 func (s *service) Deliver(ctx context.Context, deliveryID string) error {
-	// We need to look up the delivery — fetch via a dedicated repo method or scan deliveries.
-	// For simplicity, use a helper that finds delivery by ID.
 	delivery, ep, err := s.loadDelivery(ctx, deliveryID)
 	if err != nil {
 		return err
 	}
 
-	now := time.Now().UTC()
-	delivery.AttemptCount++
-	delivery.LastAttempt = &now
+	maxAttempts := 5
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
 
-	if err := s.validateWebhookURL(ctx, ep.URL); err != nil {
-		delivery.Status = domain.DeliveryFailed
-		_ = s.repo.UpdateDelivery(ctx, delivery)
-		return fmt.Errorf("validate webhook destination: %w", err)
-	}
+		now := time.Now().UTC()
+		delivery.AttemptCount++
+		delivery.LastAttempt = &now
 
-	timestamp := strconv.FormatInt(now.Unix(), 10)
-	sig := sign(ep.Secret, timestamp, delivery.Payload)
+		if err := s.validateWebhookURL(ctx, ep.URL); err != nil {
+			delivery.Status = domain.DeliveryFailed
+			_ = s.repo.UpdateDelivery(ctx, delivery)
+			return fmt.Errorf("validate webhook destination: %w", err)
+		}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep.URL, bytes.NewReader(delivery.Payload))
-	if err != nil {
-		delivery.Status = domain.DeliveryFailed
-		_ = s.repo.UpdateDelivery(ctx, delivery)
-		return fmt.Errorf("build webhook request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Fluxa-Signature", sig)
-	req.Header.Set("X-Fluxa-Timestamp", timestamp)
-	req.Header.Set("X-Fluxa-Event", string(delivery.EventType))
+		timestamp := strconv.FormatInt(now.Unix(), 10)
+		sig := sign(ep.Secret, timestamp, delivery.Payload)
 
-	resp, err := s.client.Do(req)
-	if err != nil {
-		delivery.Status = domain.DeliveryFailed
-		_ = s.repo.UpdateDelivery(ctx, delivery)
-		return fmt.Errorf("deliver webhook: %w", err)
-	}
-	defer resp.Body.Close()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep.URL, bytes.NewReader(delivery.Payload))
+		if err != nil {
+			delivery.Status = domain.DeliveryFailed
+			_ = s.repo.UpdateDelivery(ctx, delivery)
+			return fmt.Errorf("build webhook request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Fluxa-Signature", sig)
+		req.Header.Set("X-Fluxa-Timestamp", timestamp)
+		req.Header.Set("X-Fluxa-Event", string(delivery.EventType))
 
-	code := resp.StatusCode
-	delivery.ResponseCode = &code
-	if code >= 200 && code < 300 {
-		delivery.Status = domain.DeliverySuccess
-	} else {
-		delivery.Status = domain.DeliveryFailed
+		resp, reqErr := s.client.Do(req)
+
+		// Determine outcome for this attempt
+		if reqErr != nil {
+			// Network error, timeout, etc. -> Retryable
+			delivery.Status = domain.DeliveryFailed
+			// Do not log or fail immediately, just continue to next retry
+		} else {
+			code := resp.StatusCode
+			delivery.ResponseCode = &code
+			resp.Body.Close()
+
+			if code >= 200 && code < 300 {
+				delivery.Status = domain.DeliverySuccess
+				break // Success, exit retry loop
+			}
+			
+			// If not a retryable error (e.g. 400, 401, 403, 404), mark as failed and stop retrying
+			// We retry on 5xx and 429
+			if code < 500 && code != http.StatusTooManyRequests {
+				delivery.Status = domain.DeliveryFailed
+				break
+			}
+			
+			delivery.Status = domain.DeliveryFailed // Will be retried
+		}
 	}
 
 	if err := s.repo.UpdateDelivery(ctx, delivery); err != nil {
