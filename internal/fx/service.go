@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	quoteTTL        = 30 * time.Second
-	quoteKeyPrefix  = "fx:quote:"
-	refreshInterval = 30 * time.Second
+	quoteTTL          = 30 * time.Second
+	quoteKeyPrefix    = "fx:quote:"
+	refreshInterval   = 30 * time.Second
+	activePairMaxIdle = 10 * time.Minute
 )
 
 // Quote is a priced, time-limited conversion offer identified by a unique token.
@@ -70,7 +71,7 @@ type service struct {
 	spreadBps      int
 
 	activePairsMu sync.RWMutex
-	activePairs   map[string]struct{}
+	activePairs   map[string]time.Time
 }
 
 // markUsedScript atomically checks and marks a quote as used.
@@ -108,7 +109,7 @@ func NewService(
 		usdcIssuer:     usdcIssuer,
 		providers:      providers,
 		spreadBps:      spreadBps,
-		activePairs:    make(map[string]struct{}),
+		activePairs:    make(map[string]time.Time),
 	}
 	go s.backgroundRefresh(context.Background())
 	return s
@@ -285,12 +286,26 @@ func (s *service) fetchRate(ctx context.Context, from, to string) (*RateResponse
 
 func (s *service) registerActivePair(pair string) {
 	s.activePairsMu.Lock()
-	s.activePairs[pair] = struct{}{}
+	s.activePairs[pair] = time.Now()
 	s.activePairsMu.Unlock()
 }
 
-// backgroundRefresh polls all active pairs every 30 seconds and refreshes
-// the Redis rate cache with a 60-second TTL.
+// evictStalePairs removes active pairs that haven't been queried within maxAge,
+// so backgroundRefresh stops polling pairs no one is asking about anymore.
+func (s *service) evictStalePairs(maxAge time.Duration) {
+	cutoff := time.Now().Add(-maxAge)
+	s.activePairsMu.Lock()
+	defer s.activePairsMu.Unlock()
+	for pair, lastQueried := range s.activePairs {
+		if lastQueried.Before(cutoff) {
+			delete(s.activePairs, pair)
+		}
+	}
+}
+
+// backgroundRefresh polls active pairs every 30 seconds and refreshes the
+// Redis rate cache, evicting pairs that haven't been queried recently so the
+// map and the refresh workload don't grow unbounded.
 func (s *service) backgroundRefresh(ctx context.Context) {
 	ticker := time.NewTicker(refreshInterval)
 	defer ticker.Stop()
@@ -299,6 +314,8 @@ func (s *service) backgroundRefresh(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			s.evictStalePairs(activePairMaxIdle)
+
 			s.activePairsMu.RLock()
 			pairs := make([]string, 0, len(s.activePairs))
 			for pair := range s.activePairs {
