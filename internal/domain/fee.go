@@ -9,22 +9,27 @@ import (
 type FeeSchedule struct {
 	ID               string
 	TenantID         *string
+	Asset            string
 	TransferFeeBps   int
 	ConversionFeeBps int
 	MinFeeAmount     decimal.Decimal
 	MaxFeeAmount     *decimal.Decimal
-	Asset            string
-	CreatedAt        time.Time
+}
+
+type FeeTier struct {
+	ID               string
+	TenantID         *string
+	MinVolume        decimal.Decimal
+	TransferFeeBps   int
+	ConversionFeeBps int
 }
 
 type FeeCollection struct {
-	ID            string
-	TransactionID string
-	TenantID      *string
-	FeeAmount     decimal.Decimal
-	Asset         string
-	FeeBps        int
-	CollectedAt   time.Time
+	ID           string
+	TenantID     *string
+	Asset        string
+	FeeAmount    decimal.Decimal
+	CreatedAt    time.Time
 }
 
 type FeeCollectionSummary struct {
