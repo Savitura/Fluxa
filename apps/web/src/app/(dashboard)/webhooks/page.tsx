@@ -6,7 +6,7 @@ import { useToast } from '@/lib/toast-context';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
   Table,
@@ -19,7 +19,7 @@ import {
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { VerifySignatureTool } from '@/components/webhooks/verify-signature-tool';
-import { Webhook, Plus, X, Trash2 } from 'lucide-react';
+import { Webhook, Plus, X, Trash2, Key, RefreshCw } from 'lucide-react';
 
 const eventOptions = [
   'transfer.initiated',
@@ -47,12 +47,21 @@ export default function WebhooksPage() {
   ]);
   const [registering, setRegistering] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [signingSecret, setSigningSecret] = useState<string | null>(null);
+  const [showSecret, setShowSecret] = useState(false);
+  const [rotating, setRotating] = useState(false);
 
   const fetchEndpoints = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.listWebhooks();
+      const [res, secretRes] = await Promise.all([
+        api.listWebhooks(),
+        api.getWebhookSecret().catch(() => ({ signing_secret: '' })),
+      ]);
       setEndpoints(res.endpoints || []);
+      if (secretRes.signing_secret) {
+        setSigningSecret(secretRes.signing_secret);
+      }
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Failed to load webhooks', 'error');
     } finally {
@@ -71,27 +80,6 @@ export default function WebhooksPage() {
       cancelled = true;
     };
   }, [fetchEndpoints]);
-
-  useEffect(() => {
-    if (endpoints.length === 0) return;
-    let cancelled = false;
-    const loadDeliveries = async () => {
-      const all: WebhookDelivery[] = [];
-      for (const ep of endpoints) {
-        try {
-          const res = await api.listDeliveries(ep.id, 10);
-          all.push(...(res.deliveries || []));
-        } catch {}
-      }
-      if (!cancelled) {
-        setDeliveries(all);
-      }
-    };
-    loadDeliveries();
-    return () => {
-      cancelled = true;
-    };
-  }, [endpoints]);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,6 +105,21 @@ export default function WebhooksPage() {
       await fetchEndpoints();
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Failed to delete webhook', 'error');
+    }
+  };
+
+  const handleRotateSecret = async () => {
+    if (!confirm('Rotating the signing secret will invalidate all current webhook signatures. Continue?')) return;
+    setRotating(true);
+    try {
+      const res = await api.rotateWebhookSecret();
+      setSigningSecret(res.signing_secret);
+      setShowSecret(true);
+      toast('Webhook signing secret rotated', 'success');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Failed to rotate secret', 'error');
+    } finally {
+      setRotating(false);
     }
   };
 
@@ -159,6 +162,44 @@ export default function WebhooksPage() {
           )}
         </Button>
       </PageHeader>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Key className="h-5 w-5" /> Signing Secret
+              </CardTitle>
+              <CardDescription>Used to sign all outbound webhooks with HMAC-SHA256.</CardDescription>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              isLoading={rotating}
+              onClick={handleRotateSecret}
+            >
+              <RefreshCw className="h-4 w-4" /> Rotate Secret
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-3">
+            <Input
+              type={showSecret ? 'text' : 'password'}
+              value={signingSecret || ''}
+              readOnly
+              className="font-mono max-w-md"
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setShowSecret(!showSecret)}
+            >
+              {showSecret ? 'Hide' : 'Reveal'}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {showForm && (
         <Card className="max-w-2xl">
@@ -206,6 +247,10 @@ export default function WebhooksPage() {
         </Card>
       )}
 
+      <div className="grid grid-cols-1 gap-8">
+        <VerifySignatureTool />
+      </div>
+
       {endpoints.length > 0 && (
         <div className="flex flex-col gap-4">
           <h2 className="text-lg font-semibold">Registered Endpoints</h2>
@@ -227,13 +272,11 @@ export default function WebhooksPage() {
                       {ep.active ? 'Active' : 'Inactive'}
                     </Badge>
                     <Button
-                      variant="ghost"
+                      variant="danger"
                       size="sm"
-                      className="text-danger hover:bg-danger-subtle hover:text-danger"
                       onClick={() => handleDelete(ep.id)}
                     >
                       <Trash2 className="h-4 w-4" />
-                      Delete
                     </Button>
                   </div>
                 </CardContent>
@@ -242,53 +285,6 @@ export default function WebhooksPage() {
           </div>
         </div>
       )}
-
-      <div className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold">Recent Delivery Logs</h2>
-        <Card>
-          {deliveries.length === 0 ? (
-            <EmptyState
-              icon={Webhook}
-              title="No delivery logs yet"
-              description="Webhook deliveries will appear here once events are sent."
-            />
-          ) : (
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeader>Event Type</TableHeader>
-                  <TableHeader>Endpoint</TableHeader>
-                  <TableHeader>Status</TableHeader>
-                  <TableHeader>Response</TableHeader>
-                  <TableHeader>Time</TableHeader>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {deliveries.map((log) => (
-                  <TableRow key={log.id}>
-                    <TableCell className="font-medium">{log.event_type}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {log.endpoint_id.slice(0, 8)}...
-                    </TableCell>
-                    <TableCell>{deliveryStatusBadge(log.status)}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {log.response_code || '—'}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {new Date(log.created_at).toLocaleString()}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </Card>
-      </div>
-
-      <div className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold">Verify Signature</h2>
-        <VerifySignatureTool />
-      </div>
     </div>
   );
 }
