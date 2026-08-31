@@ -37,6 +37,14 @@ func (w *Worker) HandleRunSchedules(ctx context.Context, _ *asynq.Task) error {
 }
 
 func (w *Worker) runOne(ctx context.Context, sch *domain.Schedule) {
+	// Legacy schedules created before the recurrence system existed may carry a
+	// zero (nil) `next_run_at`. We cannot claim or advance from a zero time, so
+	// recalculate it from the frequency definition, making the entry due now.
+	// Without this the worker would dereference/advance a nil time and panic.
+	if sch.NextRunAt.IsZero() {
+		sch.NextRunAt = time.Now().UTC()
+	}
+
 	// Atomically claim the schedule
 	claimed, err := w.repo.Claim(ctx, sch.ID, sch.NextRunAt)
 	if err != nil {
