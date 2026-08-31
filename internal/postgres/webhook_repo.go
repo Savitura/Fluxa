@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -80,6 +81,83 @@ func (r *WebhookRepository) DeleteEndpoint(ctx context.Context, id string) error
 	query := `DELETE FROM webhook_endpoints WHERE id = $1`
 	_, err := r.db.Exec(ctx, query, id)
 	return err
+}
+
+func (r *WebhookRepository) CreateSubscription(ctx context.Context, sub *domain.WebhookSubscription) error {
+	tID := tenant.IDFromContext(ctx)
+	if tID != "" {
+		sub.TenantID = &tID
+	}
+	query := `
+		INSERT INTO webhook_subscriptions (id, tenant_id, event_type, webhook_url, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`
+	_, err := r.db.Exec(ctx, query, sub.ID, nullableUUID(sub.TenantID), sub.EventType, sub.WebhookURL, sub.CreatedAt)
+	return err
+}
+
+func (r *WebhookRepository) DeleteSubscription(ctx context.Context, id string) error {
+	tID := tenant.IDFromContext(ctx)
+	query := `DELETE FROM webhook_subscriptions WHERE id = $1`
+	args := []interface{}{id}
+	if tID != "" {
+		query += ` AND tenant_id = $2`
+		args = append(args, tID)
+	}
+	_, err := r.db.Exec(ctx, query, args...)
+	return err
+}
+
+func (r *WebhookRepository) ListSubscriptions(ctx context.Context, tenantID *string) ([]*domain.WebhookSubscription, error) {
+	var rows pgx.Rows
+	var err error
+	if tenantID != nil {
+		query := `SELECT id, tenant_id, event_type, webhook_url, created_at FROM webhook_subscriptions WHERE tenant_id = $1 ORDER BY created_at DESC`
+		rows, err = r.db.Query(ctx, query, *tenantID)
+	} else {
+		query := `SELECT id, tenant_id, event_type, webhook_url, created_at FROM webhook_subscriptions ORDER BY created_at DESC`
+		rows, err = r.db.Query(ctx, query)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var subs []*domain.WebhookSubscription
+	for rows.Next() {
+		var s domain.WebhookSubscription
+		if err := rows.Scan(&s.ID, &s.TenantID, &s.EventType, &s.WebhookURL, &s.CreatedAt); err != nil {
+			return nil, err
+		}
+		subs = append(subs, &s)
+	}
+	return subs, nil
+}
+
+func (r *WebhookRepository) GetSubscriptionsForEvent(ctx context.Context, tenantID *string, eventType string) ([]*domain.WebhookSubscription, error) {
+	var rows pgx.Rows
+	var err error
+	if tenantID != nil {
+		query := `SELECT id, tenant_id, event_type, webhook_url, created_at FROM webhook_subscriptions WHERE tenant_id = $1 AND event_type = $2`
+		rows, err = r.db.Query(ctx, query, *tenantID, eventType)
+	} else {
+		query := `SELECT id, tenant_id, event_type, webhook_url, created_at FROM webhook_subscriptions WHERE event_type = $1`
+		rows, err = r.db.Query(ctx, query, eventType)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var subs []*domain.WebhookSubscription
+	for rows.Next() {
+		var s domain.WebhookSubscription
+		if err := rows.Scan(&s.ID, &s.TenantID, &s.EventType, &s.WebhookURL, &s.CreatedAt); err != nil {
+			return nil, err
+		}
+		subs = append(subs, &s)
+	}
+	return subs, nil
 }
 
 func (r *WebhookRepository) CreateDelivery(ctx context.Context, d *domain.WebhookDelivery) error {
@@ -160,7 +238,7 @@ func (r *WebhookRepository) ListDeadLetters(ctx context.Context, tenantID *strin
 		query := `SELECT id, endpoint_id, tenant_id, delivery_id, payload, error_message, attempt_count, created_at FROM webhook_dead_letters WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
 		rows, err = r.db.Query(ctx, query, *tenantID, limit, offset)
 	} else {
-		query := `SELECT id, endpoint_id, tenant_id, delivery_id, payload, error_message, attempt_count, created_at FROM webhook_dead_letters ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+		query := `SELECT id, endpoint_id, tenant_id, delivery_id, payload, error_message, attempt_count, created_at FROM webhook_dead_letters ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 		rows, err = r.db.Query(ctx, query, limit, offset)
 	}
 	if err != nil {
@@ -168,13 +246,13 @@ func (r *WebhookRepository) ListDeadLetters(ctx context.Context, tenantID *strin
 	}
 	defer rows.Close()
 
-	var dls []*domain.WebhookDeadLetter
+	var deadLetters []*domain.WebhookDeadLetter
 	for rows.Next() {
 		var dl domain.WebhookDeadLetter
 		if err := rows.Scan(&dl.ID, &dl.EndpointID, &dl.TenantID, &dl.DeliveryID, &dl.Payload, &dl.ErrorMessage, &dl.AttemptCount, &dl.CreatedAt); err != nil {
 			return nil, err
 		}
-		dls = append(dls, &dl)
+		deadLetters = append(deadLetters, &dl)
 	}
-	return dls, nil
+	return deadLetters, nil
 }
