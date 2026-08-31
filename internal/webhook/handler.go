@@ -3,128 +3,128 @@ package webhook
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 
 	"github.com/fluxa/fluxa/internal/api"
+	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/postgres"
+	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 type Handler struct {
-	svc Service
+	repo *postgres.WebhookRepository
 }
 
-func NewHandler(svc Service) *Handler {
-	return &Handler{svc: svc}
+func NewHandler(repo *postgres.WebhookRepository) *Handler {
+	return &Handler{repo: repo}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
-	r.Post("/webhooks", h.RegisterEndpoint)
-	r.Get("/webhooks", h.ListEndpoints)
-	r.Delete("/webhooks/{id}", h.DeleteEndpoint)
-	r.Get("/webhooks/{id}/deliveries", h.ListDeliveries)
-	r.Get("/webhooks/{id}/health", h.GetEndpointHealth)
-	r.Get("/webhooks/dead-letters", h.ListDeadLetters)
-	r.Post("/webhooks/dead-letters/{id}/replay", h.ReplayDeadLetter)
-}
-
-type RegisterRequest struct {
-	URL    string   `json:"url" validate:"required,url"`
-	Events []string `json:"events"`
-}
-
-func (h *Handler) RegisterEndpoint(w http.ResponseWriter, r *http.Request) {
-	var req RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
-		return
-	}
-	ep, secret, err := h.svc.RegisterEndpoint(r.Context(), req.URL, req.Events)
-	if err != nil {
-		api.WriteError(w, http.StatusBadRequest, "REGISTRATION_FAILED", err.Error())
-		return
-	}
-	api.WriteJSON(w, http.StatusCreated, map[string]interface{}{
-		"id":         ep.ID,
-		"url":        ep.URL,
-		"secret":     secret,
-		"events":     ep.Events,
-		"active":     ep.Active,
-		"created_at": ep.CreatedAt,
-	})
+	r.Get("/webhooks/endpoints", h.ListEndpoints)
+	r.Post("/webhooks/endpoints", h.CreateEndpoint)
+	r.Delete("/webhooks/endpoints/{id}", h.DeleteEndpoint)
+	r.Get("/webhooks/subscriptions", h.ListSubscriptions)
+	r.Post("/webhooks/subscriptions", h.CreateSubscription)
+	r.Delete("/webhooks/subscriptions/{id}", h.DeleteSubscription)
 }
 
 func (h *Handler) ListEndpoints(w http.ResponseWriter, r *http.Request) {
-	endpoints, err := h.svc.ListEndpoints(r.Context())
+	tID := tenant.IDFromContext(r.Context())
+	var tIDPtr *string
+	if tID != "" {
+		tIDPtr = &tID
+	}
+	eps, err := h.repo.ListEndpoints(r.Context(), tIDPtr)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"endpoints": endpoints,
-	})
+	api.WriteJSON(w, http.StatusOK, map[string]interface{}{"endpoints": eps})
+}
+
+func (h *Handler) CreateEndpoint(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL    string   `json:"url"`
+		Events []string `json:"events"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+		return
+	}
+
+	tID := tenant.IDFromContext(r.Context())
+	var tIDPtr *string
+	if tID != "" {
+		tIDPtr = &tID
+	}
+
+	ep := &domain.WebhookEndpoint{
+		ID:       uuid.New().String(),
+		TenantID: tIDPtr,
+		URL:      req.URL,
+		Events:   req.Events,
+		Active:   true,
+	}
+
+	if err := h.repo.CreateEndpoint(r.Context(), ep); err != nil {
+		api.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	api.WriteJSON(w, http.StatusCreated, ep)
 }
 
 func (h *Handler) DeleteEndpoint(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := h.svc.DeleteEndpoint(r.Context(), id); err != nil {
-		api.WriteError(w, http.StatusNotFound, "NOT_FOUND", "webhook endpoint not found")
+	if err := h.repo.DeleteEndpoint(r.Context(), id); err != nil {
+		api.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) ListDeliveries(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	limitStr := r.URL.Query().Get("limit")
-	limit := 50
-	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-			limit = l
-		}
+func (h *Handler) ListSubscriptions(w http.ResponseWriter, r *http.Request) {
+	tID := tenant.IDFromContext(r.Context())
+	var tIDPtr *string
+	if tID != "" {
+		tIDPtr = &tID
 	}
-	deliveries, err := h.svc.ListDeliveries(r.Context(), id, limit)
+	subs, err := h.repo.ListSubscriptions(r.Context(), tIDPtr)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"deliveries": deliveries,
-	})
+	api.WriteJSON(w, http.StatusOK, map[string]interface{}{"subscriptions": subs})
 }
 
-func (h *Handler) GetEndpointHealth(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	h, err := h.svc.GetEndpointHealth(r.Context(), id)
-	if err != nil {
-		api.WriteError(w, http.StatusNotFound, "NOT_FOUND", "webhook endpoint not found")
+func (h *Handler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		EventType  string `json:"event_type"`
+		WebhookURL string `json:"webhook_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, h)
-}
 
-func (h *Handler) ListDeadLetters(w http.ResponseWriter, r *http.Request) {
-	limitStr := r.URL.Query().Get("limit")
-	limit := 50
-	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-			limit = l
-		}
+	sub := &domain.WebhookSubscription{
+		ID:         uuid.New().String(),
+		EventType:  req.EventType,
+		WebhookURL: req.WebhookURL,
 	}
-	dls, err := h.svc.ListDeadLetters(r.Context(), limit)
-	if err != nil {
+
+	if err := h.repo.CreateSubscription(r.Context(), sub); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"dead_letters": dls,
-	})
+	api.WriteJSON(w, http.StatusCreated, sub)
 }
 
-func (h *Handler) ReplayDeadLetter(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) DeleteSubscription(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := h.svc.ReplayDeadLetter(r.Context(), id); err != nil {
-		api.WriteError(w, http.StatusBadRequest, "REPLAY_FAILED", err.Error())
+	if err := h.repo.DeleteSubscription(r.Context(), id); err != nil {
+		api.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	w.WriteHeader(http.StatusNoContent)
 }
