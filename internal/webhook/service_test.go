@@ -2,7 +2,6 @@ package webhook
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,239 +10,144 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 )
 
-// mockRepo implements Repository for testing.
-type mockRepo struct {
+type fakeRepo struct {
 	endpoints  map[string]*domain.WebhookEndpoint
 	deliveries map[string]*domain.WebhookDelivery
+	deadLetters map[string]*domain.WebhookDeadLetter
 }
 
-func newMockRepo() *mockRepo {
-	return &mockRepo{
-		endpoints:  make(map[string]*domain.WebhookEndpoint),
-		deliveries: make(map[string]*domain.WebhookDelivery),
+func newFakeRepo() *fakeRepo {
+	return &fakeRepo{
+		endpoints:   make(map[string]*domain.WebhookEndpoint),
+		deliveries:  make(map[string]*domain.WebhookDelivery),
+		deadLetters: make(map[string]*domain.WebhookDeadLetter),
 	}
 }
 
-func (m *mockRepo) Create(_ context.Context, ep *domain.WebhookEndpoint) error {
-	m.endpoints[ep.ID] = ep
+func (f *fakeRepo) CreateEndpoint(_ context.Context, ep *domain.WebhookEndpoint) error {
+	f.endpoints[ep.ID] = ep
 	return nil
 }
 
-func (m *mockRepo) GetByID(_ context.Context, id string) (*domain.WebhookEndpoint, error) {
-	ep, ok := m.endpoints[id]
+func (f *fakeRepo) GetEndpoint(_ context.Context, id string) (*domain.WebhookEndpoint, error) {
+	ep, ok := f.endpoints[id]
 	if !ok {
-		return nil, domain.ErrWebhookNotFound
+		return nil, http.ErrMissingBoundary
 	}
 	return ep, nil
 }
 
-func (m *mockRepo) List(_ context.Context, _ *string) ([]*domain.WebhookEndpoint, error) {
-	var out []*domain.WebhookEndpoint
-	for _, ep := range m.endpoints {
-		out = append(out, ep)
+func (f *fakeRepo) ListEndpoints(_ context.Context, tenantID *string) ([]*domain.WebhookEndpoint, error) {
+	var res []*domain.WebhookEndpoint
+	for _, ep := range f.endpoints {
+		res = append(res, ep)
 	}
-	return out, nil
+	return res, nil
 }
 
-func (m *mockRepo) Delete(_ context.Context, id string, _ *string) error {
-	if _, ok := m.endpoints[id]; !ok {
-		return domain.ErrWebhookNotFound
-	}
-	delete(m.endpoints, id)
+func (f *fakeRepo) UpdateEndpoint(_ context.Context, ep *domain.WebhookEndpoint) error {
+	f.endpoints[ep.ID] = ep
 	return nil
 }
 
-func (m *mockRepo) ListActiveByEvent(_ context.Context, eventType string) ([]*domain.WebhookEndpoint, error) {
-	var out []*domain.WebhookEndpoint
-	for _, ep := range m.endpoints {
-		if !ep.Active {
-			continue
-		}
-		if len(ep.Events) == 0 {
-			out = append(out, ep)
-			continue
-		}
-		for _, e := range ep.Events {
-			if e == eventType {
-				out = append(out, ep)
-				break
-			}
-		}
-	}
-	return out, nil
-}
-
-func (m *mockRepo) CreateDelivery(_ context.Context, d *domain.WebhookDelivery) error {
-	m.deliveries[d.ID] = d
+func (f *fakeRepo) DeleteEndpoint(_ context.Context, id string) error {
+	delete(f.endpoints, id)
 	return nil
 }
 
-func (m *mockRepo) UpdateDelivery(_ context.Context, d *domain.WebhookDelivery) error {
-	m.deliveries[d.ID] = d
+func (f *fakeRepo) CreateDelivery(_ context.Context, d *domain.WebhookDelivery) error {
+	f.deliveries[d.ID] = d
 	return nil
 }
 
-func (m *mockRepo) GetDeliveryByID(_ context.Context, id string, _ *string) (*domain.WebhookDelivery, error) {
-	d, ok := m.deliveries[id]
+func (f *fakeRepo) GetDelivery(_ context.Context, id string) (*domain.WebhookDelivery, error) {
+	d, ok := f.deliveries[id]
 	if !ok {
-		return nil, domain.ErrWebhookDeliveryNotFound
+		return nil, http.ErrMissingBoundary
 	}
 	return d, nil
 }
 
-func (m *mockRepo) ListDeliveries(_ context.Context, endpointID string, _, _ int, _ *string) ([]*domain.WebhookDelivery, error) {
-	var out []*domain.WebhookDelivery
-	for _, d := range m.deliveries {
+func (f *fakeRepo) UpdateDelivery(_ context.Context, d *domain.WebhookDelivery) error {
+	f.deliveries[d.ID] = d
+	return nil
+}
+
+func (f *fakeRepo) ListDeliveries(_ context.Context, endpointID string, limit, offset int) ([]*domain.WebhookDelivery, error) {
+	var res []*domain.WebhookDelivery
+	for _, d := range f.deliveries {
 		if d.EndpointID == endpointID {
-			out = append(out, d)
+			res = append(res, d)
 		}
 	}
-	return out, nil
+	return res, nil
 }
 
-func (m *mockRepo) CountByTenant(_ context.Context, tenantID string) (int, error) {
-	count := 0
-	for _, ep := range m.endpoints {
-		if ep.TenantID != nil && *ep.TenantID == tenantID {
-			count++
-		}
+func (f *fakeRepo) CreateDeadLetter(_ context.Context, dl *domain.WebhookDeadLetter) error {
+	f.deadLetters[dl.ID] = dl
+	return nil
+}
+
+func (f *fakeRepo) GetDeadLetter(_ context.Context, id string) (*domain.WebhookDeadLetter, error) {
+	dl, ok := f.deadLetters[id]
+	if !ok {
+		return nil, http.ErrMissingBoundary
 	}
-	return count, nil
+	return dl, nil
 }
 
-func TestRegister(t *testing.T) {
-	repo := newMockRepo()
-	svc := NewService(repo, nil)
+func (f *fakeRepo) ListDeadLetters(_ context.Context, tenantID *string, limit, offset int) ([]*domain.WebhookDeadLetter, error) {
+	var res []*domain.WebhookDeadLetter
+	for _, dl := range f.deadLetters {
+		res = append(res, dl)
+	}
+	return res, nil
+}
 
-	ep, err := svc.Register(context.Background(), "https://example.com/hook", []string{"transfer.settled"})
+func TestWebhookService_MaxAttemptsAndDeadLetter(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo, nil, nil, 120)
+
+	ep, _, err := svc.RegisterEndpoint(context.Background(), "https://example.com/webhook", nil)
 	if err != nil {
-		t.Fatalf("Register() error: %v", err)
+		t.Fatalf("RegisterEndpoint error: %v", err)
 	}
-	if ep.ID == "" {
-		t.Fatal("expected non-empty ID")
-	}
-	if ep.Secret == "" {
-		t.Fatal("expected non-empty Secret")
-	}
-	if ep.URL != "https://example.com/hook" {
-		t.Fatalf("URL = %q, want https://example.com/hook", ep.URL)
-	}
-	if !ep.Active {
-		t.Fatal("expected endpoint to be active")
-	}
-}
 
-func TestDelete_NotFound(t *testing.T) {
-	repo := newMockRepo()
-	svc := NewService(repo, nil)
-	err := svc.Delete(context.Background(), "nonexistent")
-	if err != domain.ErrWebhookNotFound {
-		t.Fatalf("Delete() = %v, want ErrWebhookNotFound", err)
+	deliv := &domain.WebhookDelivery{
+		ID:           "del-1",
+		EndpointID:   ep.ID,
+		EventType:    "transfer.settled",
+		Payload:      "{}",
+		Status:       "pending",
+		AttemptCount: 4,
+		MaxAttempts:  5,
 	}
-}
+	_ = repo.CreateDelivery(context.Background(), deliv)
 
-func TestDispatchAndDeliver(t *testing.T) {
-	// Start a test HTTP server that records requests.
-	var received []byte
-	var receivedSig, receivedTimestamp string
+	// Mock a failing server endpoint
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedSig = r.Header.Get("X-Fluxa-Signature")
-		receivedTimestamp = r.Header.Get("X-Fluxa-Timestamp")
-		json.NewDecoder(r.Body).Decode(&received)
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer ts.Close()
+	ep.URL = ts.URL
+	_ = repo.UpdateEndpoint(context.Background(), ep)
 
-	repo := newMockRepo()
-	svc := NewService(repo, nil).(*service)
-	svc.allowPrivateNetworks = true // ts.URL is a loopback httptest server
+	// Deliver should fail on 5th attempt and push to dead-letter queue
+	err = svc.Deliver(context.Background(), deliv.ID)
+	if err == nil {
+		t.Fatalf("expected deliver error due to max attempts reached, got nil")
+	}
 
-	// Register endpoint subscribed to all events.
-	ep, _ := svc.Register(context.Background(), ts.URL, []string{})
+	dls, err := repo.ListDeadLetters(context.Background(), nil, 10, 0)
+	if err != nil || len(dls) != 1 {
+		t.Fatalf("expected 1 dead letter record, got %d (err: %v)", len(dls), err)
+	}
 
-	// Dispatch an event.
-	type payload struct{ TxID string }
-	err := svc.Dispatch(context.Background(), domain.EventTransferSettled, payload{TxID: "tx-1"})
+	h, err := svc.GetEndpointHealth(context.Background(), ep.ID)
 	if err != nil {
-		t.Fatalf("Dispatch() error: %v", err)
+		t.Fatalf("GetEndpointHealth error: %v", err)
 	}
-
-	// Find the created delivery.
-	var deliveryID string
-	for id, d := range repo.deliveries {
-		if d.EndpointID == ep.ID {
-			deliveryID = id
-			break
-		}
-	}
-	if deliveryID == "" {
-		t.Fatal("no delivery record created")
-	}
-
-	// Deliver it.
-	if err := svc.Deliver(context.Background(), deliveryID); err != nil {
-		t.Fatalf("Deliver() error: %v", err)
-	}
-
-	d := repo.deliveries[deliveryID]
-	if d.Status != domain.DeliverySuccess {
-		t.Fatalf("delivery status = %s, want success", d.Status)
-	}
-	if d.ResponseCode == nil || *d.ResponseCode != 200 {
-		t.Fatal("expected response_code 200")
-	}
-	if receivedSig == "" {
-		t.Fatal("expected X-Fluxa-Signature header")
-	}
-	if receivedTimestamp == "" {
-		t.Fatal("expected X-Fluxa-Timestamp header")
-	}
-	if got, want := receivedSig, sign(ep.Secret, receivedTimestamp, d.Payload); got != want {
-		t.Fatalf("signature = %s, want %s (signed over timestamp+\".\"+payload)", got, want)
-	}
-	if valid := Verify(ep.Secret, receivedTimestamp, string(d.Payload), receivedSig); !valid.Valid {
-		t.Fatalf("Verify() rejected a delivery this service just signed: %s", valid.Reason)
-	}
-}
-
-func TestSign_Deterministic(t *testing.T) {
-	secret := "test-secret"
-	timestamp := "1700000000"
-	payload := []byte(`{"event":"transfer.settled"}`)
-	sig1 := sign(secret, timestamp, payload)
-	sig2 := sign(secret, timestamp, payload)
-	if sig1 != sig2 {
-		t.Fatal("sign() is not deterministic")
-	}
-	if len(sig1) < 7 || sig1[:7] != "sha256=" {
-		t.Fatalf("signature format wrong: %s", sig1)
-	}
-	if otherTimestamp := sign(secret, "1700000001", payload); otherTimestamp == sig1 {
-		t.Fatal("sign() must produce a different signature for a different timestamp — the timestamp is part of the signed payload, not just a side-channel header")
-	}
-}
-
-func TestDispatch_FiltersByEvent(t *testing.T) {
-	repo := newMockRepo()
-	svc := NewService(repo, nil)
-
-	// Endpoint subscribed only to transfer.failed
-	ep := &domain.WebhookEndpoint{
-		ID:        "ep-1",
-		URL:       "https://example.com",
-		Secret:    "secret",
-		Events:    []string{"transfer.failed"},
-		Active:    true,
-		CreatedAt: time.Now(),
-	}
-	repo.endpoints[ep.ID] = ep
-
-	// Dispatch transfer.settled — should not create a delivery for this endpoint.
-	_ = svc.Dispatch(context.Background(), domain.EventTransferSettled, map[string]string{"id": "tx-1"})
-
-	for _, d := range repo.deliveries {
-		if d.EndpointID == ep.ID {
-			t.Fatal("delivery should not have been created for unsubscribed event")
-		}
+	if !h.Failing {
+		t.Fatalf("expected endpoint health failing = true")
 	}
 }

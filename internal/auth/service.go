@@ -17,7 +17,7 @@ type RegisterRequest struct {
 	Password    string `json:"password"`
 	Name        string `json:"name"`
 	AccountType string `json:"account_type"` // individual | organization
-	OrgName     string `json:"org_name"`      // required if account_type == organization
+	OrgName     string `json:"org_name"`     // required if account_type == organization
 }
 
 type AuthResponse struct {
@@ -34,24 +34,31 @@ type Service interface {
 	RefreshToken(ctx context.Context, refreshTokenStr string) (*AuthResponse, error)
 }
 
+type RefreshTokenStore interface {
+	RevokeIfActive(ctx context.Context, token string, expiresAt time.Time) (bool, error)
+}
+
 type service struct {
-	userRepo   *postgres.UserRepo
-	tenantRepo *postgres.TenantRepo
-	orgRepo    *postgres.OrgRepo
-	jwtSecret  []byte
+	userRepo      *postgres.UserRepo
+	tenantRepo    *postgres.TenantRepo
+	orgRepo       *postgres.OrgRepo
+	refreshTokens RefreshTokenStore
+	jwtSecret     []byte
 }
 
 func NewService(
 	userRepo *postgres.UserRepo,
 	tenantRepo *postgres.TenantRepo,
 	orgRepo *postgres.OrgRepo,
+	refreshTokens RefreshTokenStore,
 	jwtSecret []byte,
 ) Service {
 	return &service{
-		userRepo:   userRepo,
-		tenantRepo: tenantRepo,
-		orgRepo:    orgRepo,
-		jwtSecret:  jwtSecret,
+		userRepo:      userRepo,
+		tenantRepo:    tenantRepo,
+		orgRepo:       orgRepo,
+		refreshTokens: refreshTokens,
+		jwtSecret:     jwtSecret,
 	}
 }
 
@@ -217,6 +224,16 @@ func (s *service) RefreshToken(ctx context.Context, refreshTokenStr string) (*Au
 	newRefreshToken, err := GenerateToken(user.ID, t.ID, member.Role, user.Email, "refresh", s.jwtSecret, 7*24*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("generate refresh token: %w", err)
+	}
+	if s.refreshTokens == nil {
+		return nil, errors.New("refresh token store is not configured")
+	}
+	active, err := s.refreshTokens.RevokeIfActive(ctx, refreshTokenStr, time.Unix(claims.Exp, 0))
+	if err != nil {
+		return nil, fmt.Errorf("revoke refresh token: %w", err)
+	}
+	if !active {
+		return nil, errors.New("invalid or expired refresh token")
 	}
 
 	return &AuthResponse{

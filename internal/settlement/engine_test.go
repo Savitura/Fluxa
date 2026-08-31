@@ -74,6 +74,9 @@ func TestBuildAsset_Unsupported(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported asset, got nil")
 	}
+	if !errors.Is(err, domain.ErrInvalidAsset) {
+		t.Fatalf("expected ErrInvalidAsset, got %v", err)
+	}
 }
 
 func TestBuildAsset_EmptyRegistry(t *testing.T) {
@@ -81,6 +84,20 @@ func TestBuildAsset_EmptyRegistry(t *testing.T) {
 	_, err := e.buildAsset("USDC")
 	if err == nil {
 		t.Fatal("expected error for USDC with empty registry, got nil")
+	}
+	if !errors.Is(err, domain.ErrInvalidAsset) {
+		t.Fatalf("expected ErrInvalidAsset, got %v", err)
+	}
+}
+
+func TestBuildAsset_EmptyIssuer(t *testing.T) {
+	e := &Engine{assetIssuers: map[string]string{"USDC": ""}}
+	_, err := e.buildAsset("USDC")
+	if err == nil {
+		t.Fatal("expected error for USDC with empty issuer string, got nil")
+	}
+	if !errors.Is(err, domain.ErrInvalidAsset) {
+		t.Fatalf("expected ErrInvalidAsset, got %v", err)
 	}
 }
 
@@ -174,7 +191,9 @@ func (f *fakeTxRepo) txHash(id string) string {
 }
 
 type fakeWalletRepo struct {
-	wallets map[string]*domain.Wallet
+	mu             sync.Mutex
+	wallets        map[string]*domain.Wallet
+	upsertBalCalls int
 }
 
 func (f *fakeWalletRepo) Create(_ context.Context, _ *domain.Wallet) error { return nil }
@@ -191,6 +210,9 @@ func (f *fakeWalletRepo) GetByPublicKey(_ context.Context, _ string) (*domain.Wa
 func (f *fakeWalletRepo) List(_ context.Context, _, _ int) ([]*domain.Wallet, error) { return nil, nil }
 func (f *fakeWalletRepo) CountByTenant(_ context.Context, _ string) (int, error)     { return 0, nil }
 func (f *fakeWalletRepo) UpsertBalance(_ context.Context, _, _, _ string, _ decimal.Decimal) error {
+	f.mu.Lock()
+	f.upsertBalCalls++
+	f.mu.Unlock()
 	return nil
 }
 func (f *fakeWalletRepo) GetBalances(_ context.Context, _ string) ([]domain.BalanceRecord, error) {
@@ -198,21 +220,27 @@ func (f *fakeWalletRepo) GetBalances(_ context.Context, _ string) ([]domain.Bala
 }
 func (f *fakeWalletRepo) UpdateSyncCursor(_ context.Context, _, _ string) error { return nil }
 
-type fakeFeesService struct{}
+type fakeFeesService struct{
+	mu             sync.Mutex
+	recordColCalls int
+}
 
-func (fakeFeesService) GetSchedule(_ context.Context, _ string) (*domain.FeeSchedule, error) {
+func (f *fakeFeesService) GetSchedule(_ context.Context, _ string) (*domain.FeeSchedule, error) {
 	return nil, nil
 }
-func (fakeFeesService) CalculateTransferFee(_ context.Context, _, _ string, _ decimal.Decimal) (*fees.TransferFee, error) {
+func (f *fakeFeesService) CalculateTransferFee(_ context.Context, _, _ string, _ decimal.Decimal) (*fees.TransferFee, error) {
 	return nil, nil
 }
-func (fakeFeesService) CalculateConversionFee(_ context.Context, _, _ string, _ decimal.Decimal) (*fees.TransferFee, error) {
+func (f *fakeFeesService) CalculateConversionFee(_ context.Context, _, _ string, _ decimal.Decimal) (*fees.TransferFee, error) {
 	return nil, nil
 }
-func (fakeFeesService) RecordCollection(_ context.Context, _ *domain.FeeCollection) error {
+func (f *fakeFeesService) RecordCollection(_ context.Context, _ *domain.FeeCollection) error {
+	f.mu.Lock()
+	f.recordColCalls++
+	f.mu.Unlock()
 	return nil
 }
-func (fakeFeesService) ListCollectedSummary(_ context.Context, _, _ *time.Time) ([]domain.FeeCollectionSummary, error) {
+func (f *fakeFeesService) ListCollectedSummary(_ context.Context, _, _ *time.Time) ([]domain.FeeCollectionSummary, error) {
 	return nil, nil
 }
 
@@ -285,8 +313,11 @@ func testWallets(t *testing.T) (src, dst *domain.Wallet) {
 		&domain.Wallet{ID: "dst-wallet", PublicKey: dstKP.Address(), EncryptedSecret: "00"}
 }
 
-func newTestEngine(txRepo *fakeTxRepo, walletRepo *fakeWalletRepo, stellarClient *fakeStellarClient) *Engine {
-	return NewEngine(txRepo, walletRepo, fakeFeesService{}, stellarClient, identitySigner{}, "testnet", nil, "")
+func newTestEngine(txRepo *fakeTxRepo, walletRepo *fakeWalletRepo, feeSvc *fakeFeesService, stellarClient *fakeStellarClient) *Engine {
+	if feeSvc == nil {
+		feeSvc = &fakeFeesService{}
+	}
+	return NewEngine(txRepo, walletRepo, feeSvc, stellarClient, identitySigner{}, "testnet", nil, "")
 }
 
 func alwaysSucceeds() func(tx *txnbuild.Transaction) (horizon.Transaction, error) {
@@ -301,8 +332,9 @@ func TestSubmitTransfer_Success_MarksConfirmed(t *testing.T) {
 	tx := &domain.Transaction{ID: "tx-1", Status: domain.StatusPending, FromWallet: src.ID, ToWallet: dst.ID, Asset: "XLM", Amount: decimal.NewFromInt(10), Fee: decimal.Zero}
 	txRepo := newFakeTxRepo(tx)
 	walletRepo := &fakeWalletRepo{wallets: map[string]*domain.Wallet{src.ID: src, dst.ID: dst}}
+	feeSvc := &fakeFeesService{}
 	stl := &fakeStellarClient{submitFunc: alwaysSucceeds()}
-	e := newTestEngine(txRepo, walletRepo, stl)
+	e := newTestEngine(txRepo, walletRepo, feeSvc, stl)
 
 	if err := e.SubmitTransfer(context.Background(), "tx-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -315,6 +347,27 @@ func TestSubmitTransfer_Success_MarksConfirmed(t *testing.T) {
 	}
 	if stl.calls() != 1 {
 		t.Errorf("expected exactly 1 submit call, got %d", stl.calls())
+	}
+	if walletRepo.upsertBalCalls == 0 {
+		t.Error("expected UpsertBalance to be called")
+	}
+	// Fee is zero, so RecordCollection might be skipped. Let's create a tx with a fee for testing it.
+}
+
+func TestSubmitTransfer_Success_CollectsFees(t *testing.T) {
+	src, dst := testWallets(t)
+	tx := &domain.Transaction{ID: "tx-fee", Status: domain.StatusPending, FromWallet: src.ID, ToWallet: dst.ID, Asset: "XLM", Amount: decimal.NewFromInt(10), Fee: decimal.NewFromInt(1)}
+	txRepo := newFakeTxRepo(tx)
+	walletRepo := &fakeWalletRepo{wallets: map[string]*domain.Wallet{src.ID: src, dst.ID: dst}}
+	feeSvc := &fakeFeesService{}
+	stl := &fakeStellarClient{submitFunc: alwaysSucceeds()}
+	e := newTestEngine(txRepo, walletRepo, feeSvc, stl)
+
+	if err := e.SubmitTransfer(context.Background(), "tx-fee"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if feeSvc.recordColCalls != 1 {
+		t.Errorf("expected exactly 1 fee collection record, got %d", feeSvc.recordColCalls)
 	}
 }
 
@@ -329,7 +382,7 @@ func TestSubmitTransfer_ConcurrentWorkers_OnlyOneSubmits(t *testing.T) {
 	txRepo := newFakeTxRepo(tx)
 	walletRepo := &fakeWalletRepo{wallets: map[string]*domain.Wallet{src.ID: src, dst.ID: dst}}
 	stl := &fakeStellarClient{submitFunc: alwaysSucceeds()}
-	e := newTestEngine(txRepo, walletRepo, stl)
+	e := newTestEngine(txRepo, walletRepo, nil, stl)
 
 	const workers = 8
 	var wg sync.WaitGroup
@@ -363,7 +416,7 @@ func TestSubmitTransfer_AlreadyClaimed_Skips(t *testing.T) {
 	txRepo := newFakeTxRepo(tx)
 	walletRepo := &fakeWalletRepo{wallets: map[string]*domain.Wallet{src.ID: src, dst.ID: dst}}
 	stl := &fakeStellarClient{submitFunc: alwaysSucceeds()}
-	e := newTestEngine(txRepo, walletRepo, stl)
+	e := newTestEngine(txRepo, walletRepo, nil, stl)
 
 	if err := e.SubmitTransfer(context.Background(), "tx-1"); err != nil {
 		t.Fatalf("expected a graceful skip (nil), got error: %v", err)
@@ -384,7 +437,7 @@ func TestSubmitTransfer_DefiniteRejection_MarksFailed(t *testing.T) {
 	stl := &fakeStellarClient{submitFunc: func(_ *txnbuild.Transaction) (horizon.Transaction, error) {
 		return horizon.Transaction{}, errors.New("horizon: 400 tx_bad_auth")
 	}}
-	e := newTestEngine(txRepo, walletRepo, stl)
+	e := newTestEngine(txRepo, walletRepo, nil, stl)
 
 	if err := e.SubmitTransfer(context.Background(), "tx-1"); err == nil {
 		t.Fatal("expected error, got nil")
@@ -416,7 +469,7 @@ func TestSubmitTransfer_AmbiguousOutcome_NeverMarkedFailed(t *testing.T) {
 			return horizon.Transaction{}, errors.New("404 not found")
 		},
 	}
-	e := newTestEngine(txRepo, walletRepo, stl)
+	e := newTestEngine(txRepo, walletRepo, nil, stl)
 
 	err := e.SubmitTransfer(context.Background(), "tx-1")
 	if err == nil {
@@ -447,7 +500,7 @@ func TestSubmitTransfer_AmbiguousOutcome_ResolvedConfirmedByHashLookup(t *testin
 			return horizon.Transaction{Hash: hash, Successful: true}, nil
 		},
 	}
-	e := newTestEngine(txRepo, walletRepo, stl)
+	e := newTestEngine(txRepo, walletRepo, nil, stl)
 
 	if err := e.SubmitTransfer(context.Background(), "tx-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -470,7 +523,7 @@ func TestSubmitTransfer_AmbiguousOutcome_ResolvedFailedByHashLookup(t *testing.T
 			return horizon.Transaction{Hash: hash, Successful: false}, nil
 		},
 	}
-	e := newTestEngine(txRepo, walletRepo, stl)
+	e := newTestEngine(txRepo, walletRepo, nil, stl)
 
 	if err := e.SubmitTransfer(context.Background(), "tx-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -507,7 +560,7 @@ func TestSubmitTransfer_RetryReusesSameEnvelope(t *testing.T) {
 			return horizon.Transaction{Hash: hash, Successful: true}, nil
 		},
 	}
-	e := newTestEngine(txRepo, walletRepo, stl)
+	e := newTestEngine(txRepo, walletRepo, nil, stl)
 
 	if err := e.SubmitTransfer(context.Background(), "tx-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)

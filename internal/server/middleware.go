@@ -57,18 +57,40 @@ func recoverer(next http.Handler) http.Handler {
 	})
 }
 
-func CORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-Request-ID")
-		w.Header().Set("Access-Control-Max-Age", "86400")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
+	originSet := make(map[string]struct{}, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		originSet[strings.TrimSpace(o)] = struct{}{}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if _, ok := originSet[origin]; ok || (len(originSet) == 1 && originSet["*"] == struct{}{}) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			} else {
+				// Handle prefix matching for things like localhost:*
+				for allowed := range originSet {
+					if strings.HasSuffix(allowed, "*") {
+						prefix := strings.TrimSuffix(allowed, "*")
+						if strings.HasPrefix(origin, prefix) {
+							w.Header().Set("Access-Control-Allow-Origin", origin)
+							break
+						}
+					}
+				}
+			}
+
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-Request-ID")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {

@@ -129,7 +129,8 @@ func main() {
 
 	jwtSecretBytes := []byte(cfg.JWTSecret)
 
-	authSvc := auth.NewService(userRepo, tenantRepo, orgRepo, jwtSecretBytes)
+	refreshTokenRepo := postgres.NewRefreshTokenRepo(repoDB)
+	authSvc := auth.NewService(userRepo, tenantRepo, orgRepo, refreshTokenRepo, jwtSecretBytes)
 	orgSvc := org.NewService(orgRepo, userRepo, tenantRepo, jwtSecretBytes)
 
 	feeSvc := fees.NewService(feeRepo)
@@ -305,7 +306,8 @@ func main() {
 	feeHandler := fees.NewHandler(feeSvc)
 	apikeyHandler := apikey.NewHandler(apiKeyRepo)
 	webhookHandler := webhook.NewHandler(webhookSvc)
-	batchHandler := batch.NewHandler(batchSvc).WithIdempotency(idemMW)
+	assetRegistry := assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer)
+	batchHandler := batch.NewHandler(batchSvc).WithIdempotency(idemMW).WithAssetValidator(assetRegistry.IsSupported)
 	scheduleHandler := schedule.NewHandler(scheduleSvc)
 	treasuryHandler := treasury.NewHandler(treasurySvc).WithMutationGate(server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 
@@ -329,6 +331,7 @@ func main() {
 		},
 
 		orgRepo,
+		cfg.CORSAllowedOrigins,
 	)
 
 	quit := make(chan os.Signal, 1)
