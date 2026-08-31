@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/fluxa/fluxa/internal/api"
-	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -19,164 +17,114 @@ func NewHandler(svc Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-func (h *Handler) Routes() func(r chi.Router) {
-	return func(r chi.Router) {
-		r.Post("/", h.Register)
-		r.Get("/", h.List)
-		r.Delete("/{id}", h.Delete)
-		r.Get("/{id}/deliveries", h.ListDeliveries)
-	}
+func (h *Handler) RegisterRoutes(r chi.Router) {
+	r.Post("/webhooks", h.RegisterEndpoint)
+	r.Get("/webhooks", h.ListEndpoints)
+	r.Delete("/webhooks/{id}", h.DeleteEndpoint)
+	r.Get("/webhooks/{id}/deliveries", h.ListDeliveries)
+	r.Get("/webhooks/{id}/health", h.GetEndpointHealth)
+	r.Get("/webhooks/dead-letters", h.ListDeadLetters)
+	r.Post("/webhooks/dead-letters/{id}/replay", h.ReplayDeadLetter)
 }
 
-type registerRequest struct {
-	URL    string   `json:"url"    validate:"required,url"`
+type RegisterRequest struct {
+	URL    string   `json:"url" validate:"required,url"`
 	Events []string `json:"events"`
 }
 
-type endpointResponse struct {
-	ID        string   `json:"id"`
-	URL       string   `json:"url"`
-	Secret    string   `json:"secret,omitempty"`
-	Events    []string `json:"events"`
-	Active    bool     `json:"active"`
-	CreatedAt string   `json:"created_at"`
-}
-
-type deliveryResponse struct {
-	ID           string  `json:"id"`
-	EndpointID   string  `json:"endpoint_id"`
-	EventType    string  `json:"event_type"`
-	Status       string  `json:"status"`
-	ResponseCode *int    `json:"response_code,omitempty"`
-	AttemptCount int     `json:"attempt_count"`
-	LastAttempt  *string `json:"last_attempt,omitempty"`
-	CreatedAt    string  `json:"created_at"`
-}
-
-func toEndpointResponse(ep *domain.WebhookEndpoint, includeSecret bool) endpointResponse {
-	r := endpointResponse{
-		ID:        ep.ID,
-		URL:       ep.URL,
-		Events:    ep.Events,
-		Active:    ep.Active,
-		CreatedAt: ep.CreatedAt.Format(time.RFC3339),
-	}
-	if includeSecret {
-		r.Secret = ep.Secret
-	}
-	return r
-}
-
-func toDeliveryResponse(d *domain.WebhookDelivery) deliveryResponse {
-	r := deliveryResponse{
-		ID:           d.ID,
-		EndpointID:   d.EndpointID,
-		EventType:    string(d.EventType),
-		Status:       string(d.Status),
-		ResponseCode: d.ResponseCode,
-		AttemptCount: d.AttemptCount,
-		CreatedAt:    d.CreatedAt.Format(time.RFC3339),
-	}
-	if d.LastAttempt != nil {
-		s := d.LastAttempt.Format(time.RFC3339)
-		r.LastAttempt = &s
-	}
-	return r
-}
-
-func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
-	var req registerRequest
+func (h *Handler) RegisterEndpoint(w http.ResponseWriter, r *http.Request) {
+	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.BadRequest(w, "invalid request body")
+		api.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
-	if err := api.Validate(req); err != nil {
-		api.BadRequest(w, err.Error())
-		return
-	}
-
-	ep, err := h.svc.Register(r.Context(), req.URL, req.Events)
+	ep, secret, err := h.svc.RegisterEndpoint(r.Context(), req.URL, req.Events)
 	if err != nil {
-		api.InternalError(w, err)
+		api.WriteError(w, http.StatusBadRequest, "REGISTRATION_FAILED", err.Error())
 		return
 	}
-
-	api.JSON(w, http.StatusCreated, toEndpointResponse(ep, true))
+	api.WriteJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":         ep.ID,
+		"url":        ep.URL,
+		"secret":     secret,
+		"events":     ep.Events,
+		"active":     ep.Active,
+		"created_at": ep.CreatedAt,
+	})
 }
 
-func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	endpoints, err := h.svc.List(r.Context())
+func (h *Handler) ListEndpoints(w http.ResponseWriter, r *http.Request) {
+	endpoints, err := h.svc.ListEndpoints(r.Context())
 	if err != nil {
-		api.InternalError(w, err)
+		api.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-
-	resp := make([]endpointResponse, len(endpoints))
-	for i, ep := range endpoints {
-		resp[i] = toEndpointResponse(ep, false)
-	}
-	api.JSON(w, http.StatusOK, map[string]interface{}{"endpoints": resp})
+	api.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"endpoints": endpoints,
+	})
 }
 
-func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) DeleteEndpoint(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := h.svc.Delete(r.Context(), id); err != nil {
-		api.HandleDomainError(w, err)
+	if err := h.svc.DeleteEndpoint(r.Context(), id); err != nil {
+		api.WriteError(w, http.StatusNotFound, "NOT_FOUND", "webhook endpoint not found")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-type verifyRequest struct {
-	Secret    string `json:"secret"    validate:"required"`
-	Timestamp string `json:"timestamp" validate:"required"`
-	Body      string `json:"body"`
-	Signature string `json:"signature" validate:"required"`
-}
-
-type verifyResponse struct {
-	Valid  bool    `json:"valid"`
-	Reason *string `json:"reason"`
-}
-
-// Verify checks whether a signature/timestamp/body/secret combination is a
-// valid Fluxa webhook delivery, using the exact same algorithm documented
-// in docs/webhook-verification. Public and unauthenticated by design — it's
-// a debugging tool for developers integrating webhooks, not an operation on
-// any Fluxa resource — so it's rate-limited per-IP instead (VerifyRoutes).
-func (h *Handler) Verify(w http.ResponseWriter, r *http.Request) {
-	var req verifyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.BadRequest(w, "invalid request body")
-		return
-	}
-	if err := api.Validate(req); err != nil {
-		api.BadRequest(w, err.Error())
-		return
-	}
-
-	result := Verify(req.Secret, req.Timestamp, req.Body, req.Signature)
-	resp := verifyResponse{Valid: result.Valid}
-	if result.Reason != "" {
-		resp.Reason = &result.Reason
-	}
-	api.JSON(w, http.StatusOK, resp)
-}
-
 func (h *Handler) ListDeliveries(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-
-	deliveries, err := h.svc.ListDeliveries(r.Context(), id, limit, offset)
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+	deliveries, err := h.svc.ListDeliveries(r.Context(), id, limit)
 	if err != nil {
-		api.HandleDomainError(w, err)
+		api.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
+	api.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"deliveries": deliveries,
+	})
+}
 
-	resp := make([]deliveryResponse, len(deliveries))
-	for i, d := range deliveries {
-		resp[i] = toDeliveryResponse(d)
+func (h *Handler) GetEndpointHealth(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	h, err := h.svc.GetEndpointHealth(r.Context(), id)
+	if err != nil {
+		api.WriteError(w, http.StatusNotFound, "NOT_FOUND", "webhook endpoint not found")
+		return
 	}
-	api.JSON(w, http.StatusOK, map[string]interface{}{"deliveries": resp})
+	api.WriteJSON(w, http.StatusOK, h)
+}
+
+func (h *Handler) ListDeadLetters(w http.ResponseWriter, r *http.Request) {
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+	dls, err := h.svc.ListDeadLetters(r.Context(), limit)
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"dead_letters": dls,
+	})
+}
+
+func (h *Handler) ReplayDeadLetter(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := h.svc.ReplayDeadLetter(r.Context(), id); err != nil {
+		api.WriteError(w, http.StatusBadRequest, "REPLAY_FAILED", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
