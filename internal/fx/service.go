@@ -251,24 +251,54 @@ func (s *service) GetRates(ctx context.Context, from, to string) (*RateResponse,
 func (s *service) fetchRate(ctx context.Context, from, to string) (*RateResponse, error) {
 	pairKey := from + "-" + to
 	var selected Provider
-	for _, p := range s.providers {
-		for _, pair := range p.SupportedPairs() {
-			if pair == pairKey {
-				selected = p
+	var startIndex int
+	if cachedResp, ok := s.rateCache.Get(ctx, from, to); ok && cachedResp.Provider != "" {
+		for i, p := range s.providers {
+			if fmt.Sprintf("%T", p) == cachedResp.Provider {
+				startIndex = i
 				break
 			}
 		}
-		if selected != nil {
+	}
+
+	var selectedIndex = -1
+	var midRate decimal.Decimal
+	var err error
+
+	for i := 0; i < len(s.providers); i++ {
+		idx := (startIndex + i) % len(s.providers)
+		p := s.providers[idx]
+		supported := false
+		for _, pair := range p.SupportedPairs() {
+			if pair == pairKey {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			continue
+		}
+
+		midRate, err = p.GetRate(ctx, from, to, "1")
+		if err == nil {
+			selected = p
+			selectedIndex = idx
 			break
 		}
 	}
+
 	if selected == nil {
-		return nil, fmt.Errorf("no provider for pair %s", pairKey)
+		return nil, fmt.Errorf("no provider for pair %s: %w", pairKey, err)
 	}
 
-	midRate, err := selected.GetRate(ctx, from, to, "1")
-	if err != nil {
-		return nil, err
+	// Check if failover occurred: if there was a cached response from a different provider, or startIndex was non-zero and we tried a different provider / failed over.
+	// Actually, if we hit a provider other than the cached one (or if cached provider failed and we fell back), invalidate or reset.
+	// The requirement: "After provider failover, the cache should immediately invalidate stale entries and fetch fresh rates from the new provider."
+	// And "Reset the cache entry timestamp on provider failover events, or invalidate all cached rates when the active provider changes."
+	if cachedResp, ok := s.rateCache.Get(ctx, from, to); ok {
+		if cachedResp.Provider != "" && cachedResp.Provider != fmt.Sprintf("%T", selected) {
+			_ = s.redis.Del(ctx, rateKeyPrefix+from+":"+to).Err()
+		}
 	}
 
 	spreadFactor := decimal.NewFromInt(int64(s.spreadBps)).Div(decimal.NewFromInt(10000))
