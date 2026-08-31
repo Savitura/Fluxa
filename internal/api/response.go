@@ -18,6 +18,20 @@ type errorDetail struct {
 	Message string `json:"message"`
 }
 
+// ValidationErrorDetail describes a single invalid field in a request.
+type ValidationErrorDetail struct {
+	Row    int    `json:"row"`
+	Field  string `json:"field"`
+	Value  string `json:"value"`
+	Reason string `json:"reason"`
+}
+
+// validationErrorResponse includes per-row errors alongside the top-level error.
+type validationErrorResponse struct {
+	Error            errorDetail          `json:"error"`
+	ValidationErrors []ValidationErrorDetail `json:"validation_errors"`
+}
+
 func JSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -32,6 +46,16 @@ func Error(w http.ResponseWriter, status int, code, message string) {
 
 func BadRequest(w http.ResponseWriter, message string) {
 	Error(w, http.StatusBadRequest, "BAD_REQUEST", message)
+}
+
+// BadRequestWithValidationErrors returns a 400 with per-row error details.
+func BadRequestWithValidationErrors(w http.ResponseWriter, message string, errs []ValidationErrorDetail) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(validationErrorResponse{
+		Error:            errorDetail{Code: "BAD_REQUEST", Message: message},
+		ValidationErrors: errs,
+	})
 }
 
 func NotFound(w http.ResponseWriter, message string) {
