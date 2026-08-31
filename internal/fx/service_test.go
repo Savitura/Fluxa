@@ -563,3 +563,28 @@ func TestExecuteConversion_QuoteNotFoundInRedis(t *testing.T) {
 		t.Errorf("expected ErrQuoteExpired for missing quote, got %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// GetRates tests
+// ---------------------------------------------------------------------------
+
+func TestGetRates_Success(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mr.Close()
+
+	svc := setupService(t, mr)
+
+	// Since mockProvider returns rate=2.0 for everything, and supports USDC-XLM
+	rates, err := svc.GetRates(context.Background(), "USDC", "XLM")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	
+	if rates.Rate.Cmp(decimal.NewFromInt(2)) != 0 {
+		t.Errorf("expected rate 2, got %v", rates.Rate)
+	}
+}
+
