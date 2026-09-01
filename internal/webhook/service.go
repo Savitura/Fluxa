@@ -310,7 +310,11 @@ func (s *service) Deliver(ctx context.Context, deliveryID string) error {
 	hash.Write([]byte(deliv.Payload))
 	sig := hex.EncodeToString(hash.Sum(nil))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep.URL, bytes.NewBufferString(deliv.Payload))
+	method := deliv.Method
+	if method == "" {
+		method = http.MethodPost
+	}
+	req, err := http.NewRequestWithContext(ctx, method, ep.URL, bytes.NewBufferString(deliv.Payload))
 	if err != nil {
 		return s.handleDeliveryFailure(ctx, deliv, ep, err.Error(), nil, nil)
 	}

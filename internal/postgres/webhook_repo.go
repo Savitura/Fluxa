@@ -162,18 +162,18 @@ func (r *WebhookRepository) GetSubscriptionsForEvent(ctx context.Context, tenant
 
 func (r *WebhookRepository) CreateDelivery(ctx context.Context, d *domain.WebhookDelivery) error {
 	query := `
-		INSERT INTO webhook_deliveries (id, endpoint_id, tenant_id, event_type, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		INSERT INTO webhook_deliveries (id, endpoint_id, tenant_id, event_type, method, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
-	_, err := r.db.Exec(ctx, query, d.ID, d.EndpointID, d.TenantID, d.EventType, d.Payload, d.Status, d.ResponseCode, d.ResponseBody, d.ErrorMessage, d.AttemptCount, d.MaxAttempts, d.NextAttemptAt, d.LastAttempt, d.CreatedAt, d.UpdatedAt)
+	_, err := r.db.Exec(ctx, query, d.ID, d.EndpointID, d.TenantID, d.EventType, d.Method, d.Payload, d.Status, d.ResponseCode, d.ResponseBody, d.ErrorMessage, d.AttemptCount, d.MaxAttempts, d.NextAttemptAt, d.LastAttempt, d.CreatedAt, d.UpdatedAt)
 	return err
 }
 
 func (r *WebhookRepository) GetDelivery(ctx context.Context, id string) (*domain.WebhookDelivery, error) {
-	query := `SELECT id, endpoint_id, tenant_id, event_type, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, created_at, updated_at FROM webhook_deliveries WHERE id = $1`
+	query := `SELECT id, endpoint_id, tenant_id, event_type, method, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, created_at, updated_at FROM webhook_deliveries WHERE id = $1`
 	var d domain.WebhookDelivery
 	err := r.db.QueryRow(ctx, query, id).Scan(
-		&d.ID, &d.EndpointID, &d.TenantID, &d.EventType, &d.Payload, &d.Status, &d.ResponseCode, &d.ResponseBody, &d.ErrorMessage, &d.AttemptCount, &d.MaxAttempts, &d.NextAttemptAt, &d.LastAttempt, &d.CreatedAt, &d.UpdatedAt,
+		&d.ID, &d.EndpointID, &d.TenantID, &d.EventType, &d.Method, &d.Payload, &d.Status, &d.ResponseCode, &d.ResponseBody, &d.ErrorMessage, &d.AttemptCount, &d.MaxAttempts, &d.NextAttemptAt, &d.LastAttempt, &d.CreatedAt, &d.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errors.New("webhook delivery not found")
@@ -192,7 +192,7 @@ func (r *WebhookRepository) UpdateDelivery(ctx context.Context, d *domain.Webhoo
 }
 
 func (r *WebhookRepository) ListDeliveries(ctx context.Context, endpointID string, limit, offset int) ([]*domain.WebhookDelivery, error) {
-	query := `SELECT id, endpoint_id, tenant_id, event_type, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, created_at, updated_at FROM webhook_deliveries WHERE endpoint_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+	query := `SELECT id, endpoint_id, tenant_id, event_type, method, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, created_at, updated_at FROM webhook_deliveries WHERE endpoint_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
 	rows, err := r.db.Query(ctx, query, endpointID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -202,7 +202,7 @@ func (r *WebhookRepository) ListDeliveries(ctx context.Context, endpointID strin
 	var deliveries []*domain.WebhookDelivery
 	for rows.Next() {
 		var d domain.WebhookDelivery
-		if err := rows.Scan(&d.ID, &d.EndpointID, &d.TenantID, &d.EventType, &d.Payload, &d.Status, &d.ResponseCode, &d.ResponseBody, &d.ErrorMessage, &d.AttemptCount, &d.MaxAttempts, &d.NextAttemptAt, &d.LastAttempt, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.EndpointID, &d.TenantID, &d.EventType, &d.Method, &d.Payload, &d.Status, &d.ResponseCode, &d.ResponseBody, &d.ErrorMessage, &d.AttemptCount, &d.MaxAttempts, &d.NextAttemptAt, &d.LastAttempt, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, err
 		}
 		deliveries = append(deliveries, &d)

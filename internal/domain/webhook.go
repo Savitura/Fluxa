@@ -48,6 +48,7 @@ type WebhookDelivery struct {
 	EndpointID    string     `json:"endpoint_id"`
 	TenantID      *string    `json:"tenant_id,omitempty"`
 	EventType     string     `json:"event_type"`
+	Method        string     `json:"method"`
 	Payload       string     `json:"payload"`
 	Status        string     `json:"status"`
 	ResponseCode  int        `json:"response_code"`
