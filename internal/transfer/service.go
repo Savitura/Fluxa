@@ -17,6 +17,8 @@ import (
 	horizonclient "github.com/stellar/go/clients/horizonclient"
 )
 
+var ErrTransferFinal = errors.New("transfer already final")
+
 type TenantGetter interface {
 	GetByID(ctx context.Context, id string) (*domain.Tenant, error)
 }
@@ -27,6 +29,24 @@ type TenantGetter interface {
 type Screener interface {
 	ScreenTransfer(ctx context.Context, req domain.ScreeningRequest) (*domain.ScreeningDecision, error)
 	RecordHold(ctx context.Context, tx *domain.Transaction, decision *domain.ScreeningDecision) error
+}
+
+type AuditEntry struct {
+	Actor     string
+	Action    string
+	Resource  string
+	Timestamp time.Time
+}
+
+type AuditLogger interface {
+	Record(ctx context.Context, entry AuditEntry) error
+}
+
+type ReconcileResult struct {
+	WalletID string
+	Expected decimal.Decimal
+	Actual   decimal.Decimal
+	Drift    decimal.Decimal
 }
 
 type Service interface {
@@ -46,6 +66,9 @@ type Service interface {
 	// worker's screener-less wiring still compiles; when unset, transfers
 	// are not screened.
 	WithScreener(screener Screener) Service
+	ForceSettleTransfer(ctx context.Context, id, actor string) (*domain.Transaction, error)
+	ReconcileWallet(ctx context.Context, walletID, actor string) (*ReconcileResult, error)
+	WithAuditLogger(audit AuditLogger) Service
 }
 
 type service struct {
@@ -56,6 +79,7 @@ type service struct {
 	tenantRepo TenantGetter
 	stellar    stellar.Client
 	screener   Screener
+	audit      AuditLogger
 }
 
 func NewService(repo Repository, walletRepo walletpkg.Repository, feeSvc fees.Service, q *queue.Client, tenantRepo ...TenantGetter) Service {
@@ -73,6 +97,11 @@ func (s *service) WithStellarClient(stellarClient stellar.Client) Service {
 
 func (s *service) WithScreener(screener Screener) Service {
 	s.screener = screener
+	return s
+}
+
+func (s *service) WithAuditLogger(audit AuditLogger) Service {
+	s.audit = audit
 	return s
 }
 
@@ -276,4 +305,60 @@ func (s *service) ListTransactions(ctx context.Context, walletID string, limit, 
 		limit = 20
 	}
 	return s.repo.ListByWallet(ctx, walletID, limit, offset)
+}
+
+func (s *service) ForceSettleTransfer(ctx context.Context, id, actor string) (*domain.Transaction, error) {
+	tx, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get transaction: %w", err)
+	}
+	if tx.Status == domain.StatusSettled || tx.Status == domain.StatusFailed || tx.Status == domain.StatusReversed {
+		return nil, ErrTransferFinal
+	}
+	if s.queue == nil {
+		return nil, errors.New("settlement queue not configured")
+	}
+	if err := s.queue.EnqueueTransfer(ctx, tx.ID); err != nil {
+		return nil, fmt.Errorf("enqueue force settle: %w", err)
+	}
+	tx, err = s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get updated transaction: %w", err)
+	}
+	s.recordAudit(ctx, actor, "transfer.force_settle", id)
+	return tx, nil
+}
+
+func (s *service) ReconcileWallet(ctx context.Context, walletID, actor string) (*ReconcileResult, error) {
+	if _, err := s.walletRepo.GetByID(ctx, walletID); err != nil {
+		return nil, fmt.Errorf("get wallet: %w", err)
+	}
+	if s.queue == nil {
+		return nil, errors.New("reconcile queue not configured")
+	}
+	type reconcileQueue interface {
+		EnqueueReconcile(ctx context.Context, walletID string) (*ReconcileResult, error)
+	}
+	q, ok := s.queue.(reconcileQueue)
+	if !ok {
+		return nil, errors.New("reconcile queue does not support reconciliation")
+	}
+	result, err := q.EnqueueReconcile(ctx, walletID)
+	if err != nil {
+		return nil, fmt.Errorf("enqueue reconcile: %w", err)
+	}
+	s.recordAudit(ctx, actor, "wallet.reconcile", walletID)
+	return result, nil
+}
+
+func (s *service) recordAudit(ctx context.Context, actor, action, resource string) {
+	if s.audit == nil {
+		return
+	}
+	_ = s.audit.Record(ctx, AuditEntry{
+		Actor:     actor,
+		Action:    action,
+		Resource:  resource,
+		Timestamp: time.Now().UTC(),
+	})
 }

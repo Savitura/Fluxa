@@ -302,6 +302,34 @@ func (s *Service) dispatchWebhook(ctx context.Context, event domain.EventType, t
 	}
 }
 
+// ForceSettle enqueues a settlement task for a specific transfer so the
+// settlement worker can process it. This is used by the admin force-settle
+// endpoint to re-trigger settlement for a stuck transfer without duplicating
+// worker logic.
+func (s *Service) ForceSettle(ctx context.Context, transferID string) error {
+	payload := map[string]interface{}{
+		"transfer_id": transferID,
+	}
+	if err := s.queue.Enqueue(ctx, "settle_transfer", payload); err != nil {
+		return fmt.Errorf("enqueue force-settle for transfer %s: %w", transferID, err)
+	}
+	log.Info().Str("transfer_id", transferID).Msg("reconcile: force-settle enqueued")
+	return nil
+}
+
+// ReconcileWallet enqueues a one-off reconciliation task for a wallet. The
+// worker will compare DB balances to Horizon and report any drift.
+func (s *Service) ReconcileWallet(ctx context.Context, walletID string) error {
+	payload := map[string]interface{}{
+		"wallet_id": walletID,
+	}
+	if err := s.queue.Enqueue(ctx, "reconcile_wallet", payload); err != nil {
+		return fmt.Errorf("enqueue wallet reconciliation for %s: %w", walletID, err)
+	}
+	log.Info().Str("wallet_id", walletID).Msg("reconcile: wallet reconciliation enqueued")
+	return nil
+}
+
 // Reconcile verifies confirmed transactions against Horizon and flags
 // discrepancies in the ledger audit log.
 func (s *Service) Reconcile(ctx context.Context) error {
