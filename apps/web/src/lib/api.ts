@@ -28,6 +28,22 @@ export interface Transaction {
   id: string;
   amount: string;
   status: string;
+  created_at: string;
+  currency?: string;
+  batch_id?: string;
+}
+
+export interface TransferListParams {
+  before?: string;
+  after?: string;
+  limit?: number;
+  sort?: 'created_at' | 'amount' | 'status';
+  order?: 'asc' | 'desc';
+  status?: string;
+  date_from?: string;
+  date_to?: string;
+  currency?: string;
+  batch_id?: string;
 }
 
 export interface WalletBalance {
@@ -69,7 +85,11 @@ export const api = {
   getFeeSchedule: () => request<FeeSchedule>('/v1/fees'),
   listWallets: () => request<{ wallets: any[] }>('/v1/wallets'),
   getWalletBalances: (id: string) => request<{ balances: WalletBalance[] }>(`/v1/wallets/${id}/balances`),
-  listTransactions: (walletId: string, limit = 10) => request<{ transactions: Transaction[] }>(`/v1/wallets/${walletId}/transactions?limit=${limit}`),
+  listTransactions: (walletId: string, params: number | TransferListParams = 10) => {
+    const query = typeof params === 'number' ? { limit: params } : params;
+    const search = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]));
+    return request<{ transactions: Transaction[]; next_cursor?: string; has_more?: boolean }>(`/v1/wallets/${walletId}/transactions?${search}`);
+  },
   listWebhooks: () => request<{ endpoints: WebhookEndpoint[] }>('/v1/webhooks'),
   registerWebhook: (url: string, events: string[]) => request<WebhookEndpoint>('/v1/webhooks', {
     method: 'POST',
