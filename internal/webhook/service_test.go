@@ -151,3 +151,61 @@ func TestWebhookService_MaxAttemptsAndDeadLetter(t *testing.T) {
 		t.Fatalf("expected endpoint health failing = true")
 	}
 }
+
+func TestWebhookService_RetryPreservesHTTPMethod(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo, nil, nil, 120)
+
+	ep, _, err := svc.RegisterEndpoint(context.Background(), "https://example.com/webhook", nil)
+	if err != nil {
+		t.Fatalf("RegisterEndpoint error: %v", err)
+	}
+
+	// Track the HTTP method used on each delivery attempt.
+	var methods []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		// First attempt fails with 503, subsequent attempts succeed.
+		if len(methods) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+	ep.URL = ts.URL
+	_ = repo.UpdateEndpoint(context.Background(), ep)
+
+	deliv := &domain.WebhookDelivery{
+		ID:           "del-method-1",
+		EndpointID:   ep.ID,
+		EventType:    "transfer.settled",
+		Method:       http.MethodPost,
+		Payload:      "{}",
+		Status:       "pending",
+		AttemptCount: 0,
+		MaxAttempts:  5,
+	}
+	_ = repo.CreateDelivery(context.Background(), deliv)
+
+	// First attempt: server returns 503, delivery fails and is re-queued.
+	err = svc.Deliver(context.Background(), deliv.ID)
+	if err == nil {
+		t.Fatalf("expected first delivery to fail with 503, got nil")
+	}
+
+	// Second attempt (retry): should use the original POST method.
+	err = svc.Deliver(context.Background(), deliv.ID)
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got error: %v", err)
+	}
+
+	if len(methods) != 2 {
+		t.Fatalf("expected 2 delivery attempts, got %d", len(methods))
+	}
+	for i, m := range methods {
+		if m != http.MethodPost {
+			t.Fatalf("attempt %d used method %q, want %q", i+1, m, http.MethodPost)
+		}
+	}
+}

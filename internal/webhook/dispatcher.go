@@ -107,6 +107,7 @@ func (d *Dispatcher) sendToEndpoint(ctx context.Context, ep *domain.WebhookEndpo
 		EndpointID:   ep.ID,
 		TenantID:     ep.TenantID,
 		EventType:    eventType,
+		Method:       http.MethodPost,
 		Payload:      payload,
 		Status:       "pending",
 		AttemptCount: 1,
