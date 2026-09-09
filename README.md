@@ -1,64 +1,266 @@
 # Fluxa
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 
 **Cross-border payment infrastructure for emerging markets.**
 
-Fluxa is a programmable payments API built on the [Stellar](https://stellar.org) network. It gives fintech products and developers the primitives to move value across borders — wallet management, internal transfers, FX conversion via Stellar path payments, and settlement — behind a clean REST API.
+Fluxa is a programmable payments API built on [Stellar](https://stellar.org). It provides the primitives fintech products need to move value across borders: wallet management, internal transfers, FX conversion via Stellar path payments, and settlement — all behind a clean REST API.
 
-[![Run in Postman](https://img.shields.io/badge/Run%20in%20Postman-FF6C37?style=for-the-badge&logo=postman&logoColor=white)](docs/fluxa.postman_collection.json)
-[![Environment](https://img.shields.io/badge/Environment-FF6C37?style=for-the-badge&logo=postman&logoColor=white)](docs/fluxa.postman_environment.json)
-[![Quickstart](https://img.shields.io/badge/Quickstart-36C5F0?style=for-the-badge&logo=readthedocs&logoColor=white)](docs/quickstart.md)
-[![Errors](https://img.shields.io/badge/Error%20Reference-CD5C5C?style=for-the-badge&logo=readthedocs&logoColor=white)](docs/errors.md)
+## The Problem
 
-> **Status**: Active development — testnet only.
+Moving money across borders in emerging markets is slow, expensive, and opaque. Traditional rails charge 5-10% fees, take days to settle, and require manual reconciliation. Developers building fintech products in these regions have to either build payment infrastructure from scratch or accept the limitations of legacy providers.
+
+## The Solution
+
+Fluxa abstracts the complexity of cross-border payments into a simple API:
+
+- **Custodial wallets** — Create Stellar wallets with encrypted key storage (AES-256-GCM)
+- **Instant transfers** — Move funds between wallets with sub-second finality on Stellar
+- **FX conversion** — Convert between currencies using Stellar path payments with transparent fees
+- **Fiat on/off ramps** — Deposit and withdraw local currency via integrated providers
+- **Compliance screening** — OFAC sanctions checking, velocity limits, and structuring detection
+- **Webhooks** — Real-time notifications with HMAC-SHA256 signature verification
 
 ---
 
-## Webhook Signature Verification
+## Architecture
 
-Every outbound webhook delivery includes headers:
-- `X-Fluxa-Signature`: `sha256=<hex HMAC-SHA256 signature>`
-- `X-Fluxa-Timestamp`: Unix epoch seconds at delivery time
-
-### Verification in Go
-```go
-import (
-    "crypto/hmac"
-    "crypto/sha256"
-    "encoding/hex"
-    "strconv"
-    "time"
-)
-
-func Verify(secret, timestamp, body, signature string) bool {
-    ts, err := strconv.ParseInt(timestamp, 10, 64)
-    if err != nil || abs(time.Now().Unix() - ts) >= 300 {
-        return false
-    }
-    mac := hmac.New(sha256.New, []byte(secret))
-    mac.Write([]byte(timestamp + "." + body))
-    expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-    return hmac.Equal([]byte(expected), []byte(signature))
-}
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Fluxa API                               │
+│  cmd/api                                                        │
+│  ├── REST endpoints (auth, wallets, transfers, FX, webhooks)   │
+│  ├── JWT + API key authentication                               │
+│  └── Idempotency middleware                                     │
+└─────────────────────────────────────────────────────────────────┘
+        │                                    │
+        ▼                                    ▼
+┌───────────────┐                   ┌───────────────────┐
+│  PostgreSQL   │                   │      Redis        │
+│  - Wallets    │                   │  - Job queue      │
+│  - Transfers  │                   │  - Rate limiting  │
+│  - Tenants    │                   │  - FX quote cache │
+└───────────────┘                   └───────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       Fluxa Worker                              │
+│  cmd/worker                                                     │
+│  ├── Settlement engine (submits Stellar transactions)          │
+│  ├── Ledger indexer (syncs on-chain state)                     │
+│  ├── Webhook delivery                                           │
+│  ├── Reconciliation (5-minute checks)                          │
+│  ├── Scheduled payouts                                          │
+│  └── OFAC SDN list refresh (daily)                             │
+└─────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Stellar Network                             │
+│  - Horizon API (transaction submission, account queries)       │
+│  - Testnet: horizon-testnet.stellar.org                        │
+│  - Mainnet: horizon.stellar.org                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Verification in TypeScript
-```typescript
-import { createHmac, timingSafeEqual } from "node:crypto";
+### Key Internal Packages
 
-export function verifyWebhook(secret: string, timestamp: string, body: string, signature: string): boolean {
-    if (Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) >= 300) return false;
-    const expected = "sha256=" + createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
-    const p = Buffer.from(signature);
-    const e = Buffer.from(expected);
-    return p.length === e.length && timingSafeEqual(p, e);
-}
-```
+| Package | Purpose |
+|---------|---------|
+| `internal/wallet` | Wallet creation, trustlines, balance queries |
+| `internal/transfer` | Transfer initiation and status tracking |
+| `internal/settlement` | Stellar transaction submission |
+| `internal/fx` | FX quotes and conversions via path payments |
+| `internal/compliance` | Sanctions screening, velocity checks |
+| `internal/webhook` | Event delivery with signature verification |
+| `internal/fiat` | Flutterwave/Yellow Card fiat rails |
 
-### Verification via curl
+---
+
+## Quick Start
+
+### Option 1: Docker (Recommended)
+
+The fastest way to run Fluxa locally:
+
 ```bash
-curl -X POST http://localhost:3000/v1/webhooks/verify \
-  -H "Content-Type: application/json" \
-  -d '{"secret":"whsec_...","timestamp":"1700000000","body":"{}","signature":"sha256=..."}'
+# Clone the repository
+git clone https://github.com/Savitura/Fluxa.git
+cd Fluxa
+
+# Generate an encryption key
+export MASTER_ENCRYPTION_KEY=$(openssl rand -hex 32)
+
+# Start all services
+docker compose up --build -d
+
+# Check health
+curl http://localhost:3000/health
 ```
+
+This starts:
+- **API** on `http://localhost:3000`
+- **Worker** for background jobs
+- **PostgreSQL** on port 5432
+- **Redis** on port 6379
+
+### Option 2: Local Development
+
+Prerequisites: Go 1.22+, PostgreSQL 15+, Redis 7+
+
+```bash
+# Clone and setup
+git clone https://github.com/Savitura/Fluxa.git
+cd Fluxa
+go mod tidy
+
+# Configure environment
+cp .env.example .env
+# Edit .env:
+#   DATABASE_URL=postgresql://user:password@localhost:5432/fluxa?sslmode=disable
+#   REDIS_URL=redis://localhost:6379
+#   MASTER_ENCRYPTION_KEY=<output of: openssl rand -hex 32>
+
+# Run migrations
+make migrate
+
+# Start the API (Terminal 1)
+make run-api
+
+# Start the worker (Terminal 2)
+make run-worker
+```
+
+---
+
+## Demo Walkthrough
+
+Once Fluxa is running locally, try the complete flow:
+
+### 1. Register and get a JWT
+
+```bash
+curl -X POST http://localhost:3000/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Demo Fintech",
+    "email": "demo@example.com",
+    "password": "secure-password-123"
+  }'
+```
+
+Response:
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "tenant_id": "0193b0b4-1b33-7e9a-bcf6-..."
+}
+```
+
+### 2. Create an API key
+
+```bash
+curl -X POST http://localhost:3000/v1/keys \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <jwt_token>" \
+  -d '{"label": "Demo Key"}'
+```
+
+Save the `key` value — it's shown only once.
+
+### 3. Create a wallet
+
+```bash
+curl -X POST http://localhost:3000/v1/wallets \
+  -H "Authorization: Bearer sk_live_..."
+```
+
+### 4. Fund it on testnet
+
+```bash
+curl "https://friendbot.stellar.org?addr=<PUBLIC_KEY>"
+```
+
+### 5. Check balances
+
+```bash
+curl -H "Authorization: Bearer sk_live_..." \
+  "http://localhost:3000/v1/wallets/<wallet_id>/balances"
+```
+
+### 6. Transfer between wallets
+
+Create a second wallet, fund it, then transfer:
+
+```bash
+curl -X POST http://localhost:3000/v1/transfers \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk_live_..." \
+  -d '{
+    "from_wallet_id": "<sender_id>",
+    "to_wallet_id": "<recipient_id>",
+    "asset": "XLM",
+    "amount": "10.0000000"
+  }'
+```
+
+The transfer returns `202 Accepted` with `status: pending`. The worker submits the Stellar transaction in the background. Poll the transfer endpoint or register a webhook to get notified when it settles.
+
+See [docs/quickstart.md](docs/quickstart.md) for the complete 10-step integration guide including USDC trustlines, FX quotes, and webhooks.
+
+---
+
+## Configuration
+
+Key environment variables (see [.env.example](.env.example) for the full list):
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection string |
+| `MASTER_ENCRYPTION_KEY` | 64-char hex string for wallet key encryption |
+| `STELLAR_NETWORK` | `testnet` or `pubnet` |
+| `STELLAR_HORIZON_URL` | Horizon API endpoint |
+| `COMPLIANCE_ENABLED` | Enable OFAC screening (recommended in production) |
+
+---
+
+## TypeScript SDK
+
+```bash
+npm install @savitura/fluxa
+```
+
+```typescript
+import { FluxaClient } from "@savitura/fluxa";
+
+const client = new FluxaClient({ apiKey: "sk_live_..." });
+
+const wallet = await client.wallets.create();
+const tx = await client.transfers.create({
+  from_wallet_id: wallet.id,
+  to_wallet_id: "recipient-id",
+  asset: "USDC",
+  amount: "100.0000000",
+});
+```
+
+See [sdk/README.md](sdk/README.md) for full documentation.
+
+---
+
+## Documentation
+
+- [Quickstart Guide](docs/quickstart.md) — Complete integration walkthrough
+- [Error Reference](docs/errors.md) — API error codes and resolutions
+- [Idempotency](docs/idempotency.md) — Safe retries with idempotency keys
+- [Webhook Verification](docs/webhook-verification/README.md) — Signature verification in Go/TypeScript
+- [Failover](FAILOVER.md) — Multi-region deployment and disaster recovery
+- [Contributing](CONTRIBUTING.md) — Development setup and contribution guidelines
+
+---
+
+## License
+
+[MIT](LICENSE)

@@ -1,8 +1,8 @@
 # Fluxa Quickstart
 
-This guide walks through the complete integration flow — from creating an account to receiving a webhook notification — using testnet. Every step includes the exact `curl` command, the expected response, and what to watch out for.
+This guide walks through the complete integration flow — from creating an account to receiving a webhook notification. Every step includes the exact `curl` command, the expected response, and what to watch out for.
 
-> **Prerequisites**: You need `curl` installed. A testnet environment is available at `https://api.testnet.fluxa.dev`.
+> **Prerequisites**: You need `curl` and `jq` installed. Run Fluxa locally using Docker or from source (see the main [README](../README.md)).
 
 ---
 
@@ -11,7 +11,7 @@ This guide walks through the complete integration flow — from creating an acco
 Create an account. Fluxa is multi-tenant — this creates a tenant (individual or organization) and returns a JWT for subsequent requests.
 
 ```bash
-curl -X POST https://api.testnet.fluxa.dev/v1/auth/register \
+curl -X POST http://localhost:3000/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{
     "name": "My Fintech Co",
@@ -41,7 +41,7 @@ Save the `token` — you'll use it as `Authorization: Bearer <token>` in the nex
 API keys are the primary authentication mechanism for programmatic access. The raw key is shown **exactly once** on creation.
 
 ```bash
-curl -X POST https://api.testnet.fluxa.dev/v1/keys \
+curl -X POST http://localhost:3000/v1/keys \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <jwt_token>" \
   -d '{
@@ -79,7 +79,7 @@ Authorization: Bearer YOUR_API_KEY_sk_live_replace_with_real_key
 Create a Stellar wallet. Fluxa generates a keypair and stores the secret key encrypted with AES-256-GCM. The raw secret is never exposed.
 
 ```bash
-curl -X POST https://api.testnet.fluxa.dev/v1/wallets \
+curl -X POST http://localhost:3000/v1/wallets \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk_live_..."
 ```
@@ -130,7 +130,7 @@ Verify the balance:
 
 ```bash
 curl -H "Authorization: Bearer sk_live_..." \
-  "https://api.testnet.fluxa.dev/v1/wallets/<wallet_id>/balances"
+  "http://localhost:3000/v1/wallets/<wallet_id>/balances"
 ```
 
 Expected:
@@ -155,7 +155,7 @@ Expected:
 Before the wallet can hold USDC, it must establish a trustline to the USDC issuer. This submits a Stellar `change_trust` operation.
 
 ```bash
-curl -X POST https://api.testnet.fluxa.dev/v1/wallets/<wallet_id>/trustlines \
+curl -X POST http://localhost:3000/v1/wallets/<wallet_id>/trustlines \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk_live_..." \
   -d '{
@@ -189,7 +189,7 @@ Now the wallet can hold USDC. Transfer some test USDC from the Stellar testnet f
 Before converting currencies, get a 30-second exchange rate quote. This locks in the rate for a short window.
 
 ```bash
-curl -X POST https://api.testnet.fluxa.dev/v1/fx/quote \
+curl -X POST http://localhost:3000/v1/fx/quote \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk_live_..." \
   -d '{
@@ -227,7 +227,7 @@ The `expires_at` field gives you 30 seconds to execute the conversion. If it exp
 Convert USDC to NGN using a previously quoted rate. This internally fetches a fresh quote, validates it hasn't expired, and executes the swap.
 
 ```bash
-curl -X POST https://api.testnet.fluxa.dev/v1/fx/convert \
+curl -X POST http://localhost:3000/v1/fx/convert \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk_live_..." \
   -d '{
@@ -266,7 +266,7 @@ Transfers are **asynchronous**. The API returns `202 Accepted` immediately with 
 First, create a **second wallet** (recipient) by repeating Step 3, and fund it with XLM via Friendbot (Step 4).
 
 ```bash
-curl -X POST https://api.testnet.fluxa.dev/v1/transfers \
+curl -X POST http://localhost:3000/v1/transfers \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk_live_..." \
   -d '{
@@ -311,7 +311,7 @@ Poll the transfer endpoint until the status changes from `pending` to `confirmed
 
 ```bash
 curl -H "Authorization: Bearer sk_live_..." \
-  "https://api.testnet.fluxa.dev/v1/transfers/<transfer_id>"
+  "http://localhost:3000/v1/transfers/<transfer_id>"
 ```
 
 **Expected response — pending (200 OK):**
@@ -348,7 +348,7 @@ A simple polling loop in bash:
 #!/bin/bash
 ID="<transfer_id>"
 KEY="sk_live_..."
-URL="https://api.testnet.fluxa.dev/v1/transfers/$ID"
+URL="http://localhost:3000/v1/transfers/$ID"
 STATUS="pending"
 while [ "$STATUS" = "pending" ] || [ "$STATUS" = "submitted" ]; do
   sleep 2
@@ -369,7 +369,7 @@ echo "Final status: $STATUS"
 Instead of polling, register a webhook endpoint that Fluxa will call when a transfer settles. The payload includes an HMAC-SHA256 signature for verification.
 
 ```bash
-curl -X POST https://api.testnet.fluxa.dev/v1/webhooks \
+curl -X POST http://localhost:3000/v1/webhooks \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk_live_..." \
   -d '{
@@ -432,7 +432,7 @@ Check delivery status:
 
 ```bash
 curl -H "Authorization: Bearer sk_live_..." \
-  "https://api.testnet.fluxa.dev/v1/webhooks/<webhook_id>/deliveries"
+  "http://localhost:3000/v1/webhooks/<webhook_id>/deliveries"
 ```
 
 ---
