@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"
@@ -15,6 +16,24 @@ type FiatRepo struct {
 
 func NewFiatRepo(db DB) *FiatRepo {
 	return &FiatRepo{db: db}
+}
+
+func (r *FiatRepo) ClaimWebhookEvent(ctx context.Context, provider, eventID string, expiresAt time.Time) (bool, error) {
+	query := `
+		INSERT INTO webhook_events (provider, event_id, expires_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (event_id) DO NOTHING
+	`
+	tag, err := r.db.Exec(ctx, query, provider, eventID, expiresAt)
+	if err != nil {
+		return false, fmt.Errorf("claim webhook event: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (r *FiatRepo) CleanupWebhookEvents(ctx context.Context) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM webhook_events WHERE expires_at <= NOW()`)
+	return err
 }
 
 func (r *FiatRepo) CreateDeposit(ctx context.Context, d *domain.FiatDeposit) error {

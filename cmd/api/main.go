@@ -199,7 +199,7 @@ func main() {
 	// per-request provider selection yet.
 	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
 
-	fiatSvc := fiat.NewService(fiatRepo, fiat.NewRailAdapter(fwProvider), fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
+	fiatSvc := fiat.NewService(fiatRepo, fiat.NewRailAdapter(fwProvider), fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave", fiatRepo)
 
 	anchorRegistry := anchor.NewRegistry(anchorRepo, nil)
 	if err := anchorRegistry.Load(ctx); err != nil {

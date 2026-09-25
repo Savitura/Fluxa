@@ -78,6 +78,7 @@ func main() {
 	scheduleRepo := postgres.NewScheduleRepo(repoDB)
 	treasuryRepo := postgres.NewTreasuryRepo(repoDB)
 	complianceRepo := postgres.NewComplianceRepo(repoDB).WithPrimary(db)
+	fiatRepo := postgres.NewFiatRepo(repoDB)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -135,6 +136,20 @@ func main() {
 
 	webhookSvc := webhook.NewService(webhookRepo, qClient)
 	webhookWorker := webhook.NewWorker(webhookSvc)
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			if err := fiatRepo.CleanupWebhookEvents(ctx); err != nil {
+				log.Warn().Err(err).Msg("fiat webhook event cleanup failed")
+			}
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	treasurySvc := treasury.NewService(
 		treasuryRepo, stellarClient, nil, webhookSvc,
