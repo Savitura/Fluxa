@@ -305,7 +305,7 @@ func main() {
 	}
 	transferHandler := transfer.NewHandler(transferSvc).WithIdempotency(idemMW)
 	fxHandler := fx.NewHandler(fxSvc).WithIdempotency(idemMW)
-	fiatHandler := fiat.NewHandler(fiatSvc)
+	fiatHandler := fiat.NewHandler(fiatSvc).WithIdempotency(idemMW)
 	anchorFiatHandler := fiat.NewAnchorHandler(anchorFiatSvc)
 	anchorHandler := anchor.NewHandler(anchorRegistry)
 	feeHandler := fees.NewHandler(feeSvc)

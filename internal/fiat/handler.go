@@ -13,11 +13,18 @@ import (
 )
 
 type Handler struct {
-	svc Service
+	svc  Service
+	idem func(http.Handler) http.Handler
 }
 
 func NewHandler(svc Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+// WithIdempotency attaches the idempotency-key middleware to mutating routes.
+func (h *Handler) WithIdempotency(mw func(http.Handler) http.Handler) *Handler {
+	h.idem = mw
+	return h
 }
 
 func (h *Handler) DepositRoutes() func(r chi.Router) {
@@ -28,7 +35,22 @@ func (h *Handler) DepositRoutes() func(r chi.Router) {
 
 func (h *Handler) WithdrawRoutes() func(r chi.Router) {
 	return func(r chi.Router) {
-		r.Post("/fiat", h.handleWithdrawal)
+		post := r.Post
+		if h.idem != nil {
+			post = r.With(h.idem).Post
+		}
+		post("/", h.handleWithdrawal)
+		post("/fiat", h.handleWithdrawal)
+	}
+}
+
+func (h *Handler) WithdrawalRoutes() func(r chi.Router) {
+	return func(r chi.Router) {
+		post := r.Post
+		if h.idem != nil {
+			post = r.With(h.idem).Post
+		}
+		post("/", h.handleWithdrawal)
 	}
 }
 
@@ -89,6 +111,7 @@ func (h *Handler) handleDeposit(w http.ResponseWriter, r *http.Request) {
 }
 
 type withdrawReq struct {
+	WalletID      string `json:"wallet_id,omitempty"`
 	Amount        string `json:"amount" validate:"required"`
 	Currency      string `json:"currency" validate:"required"`
 	AccountBank   string `json:"account_bank" validate:"required"`
@@ -96,15 +119,18 @@ type withdrawReq struct {
 }
 
 func (h *Handler) handleWithdrawal(w http.ResponseWriter, r *http.Request) {
-	walletID := chi.URLParam(r, "id")
-	if walletID == "" {
-		api.BadRequest(w, "wallet id is required")
-		return
-	}
-
 	var req withdrawReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.BadRequest(w, "invalid request body")
+		return
+	}
+
+	walletID := chi.URLParam(r, "id")
+	if walletID == "" {
+		walletID = req.WalletID
+	}
+	if walletID == "" {
+		api.BadRequest(w, "wallet id is required")
 		return
 	}
 
