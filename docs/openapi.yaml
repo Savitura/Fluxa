@@ -466,6 +466,18 @@ paths:
       tags: ["Wallets"]
       parameters:
         - $ref: "#/components/parameters/WalletID"
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
       requestBody:
         required: true
         content:
@@ -491,6 +503,61 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: "Conflict: request in progress or idempotency key reused with different body"
+
+  # ── Withdrawals ────────────────────────────────────────────────────────────
+  /v1/withdrawals:
+    post:
+      operationId: initiateWithdrawal
+      summary: "Initiate a withdrawal"
+      description: "Converts USDC from the wallet and sends fiat to a bank account, protected by idempotency."
+      tags: ["Wallets"]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["wallet_id", "amount", "currency", "account_bank", "account_number"]
+              properties:
+                wallet_id:
+                  type: string
+                  format: uuid
+                amount:
+                  type: string
+                currency:
+                  type: string
+                account_bank:
+                  type: string
+                account_number:
+                  type: string
+      responses:
+        "200":
+          description: "Withdrawal initiated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WithdrawalResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: "Conflict: request in progress or idempotency key reused with different body"
 
   # ── Transfers ─────────────────────────────────────────────────────────────
   /v1/transfers:
@@ -499,6 +566,19 @@ paths:
       summary: "Initiate a transfer"
       description: "Moves an asset between two wallets, applying platform fees."
       tags: ["Transfers"]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate transfers on retries"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate transfers on retries"
       requestBody:
         required: true
         content:
@@ -534,6 +614,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: "Conflict: request in progress or idempotency key reused with different body"
 
     get:
       operationId: listTransfers

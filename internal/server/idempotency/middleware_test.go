@@ -15,11 +15,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// mockRepo is a minimal in-memory Repository that mirrors the real
-// Postgres-backed semantics closely enough to exercise the middleware:
-// the first TryAcquire for a (org, key) pair wins and the record starts
-// "processing"; every subsequent TryAcquire sees the same record until
-// Complete overwrites it.
 type mockRepo struct {
 	mu      sync.Mutex
 	records map[string]*idempotency.Record
@@ -34,10 +29,21 @@ func (m *mockRepo) TryAcquire(ctx context.Context, orgID, key, requestHash strin
 	defer m.mu.Unlock()
 	k := orgID + ":" + key
 	if rec, ok := m.records[k]; ok {
-		cp := *rec
-		return &cp, true, nil
+		// Handle 24-hour expiration simulation
+		if !rec.ExpiresAt.IsZero() && time.Now().After(rec.ExpiresAt) {
+			delete(m.records, k)
+		} else {
+			cp := *rec
+			return &cp, true, nil
+		}
 	}
-	m.records[k] = &idempotency.Record{OrgID: orgID, Key: key, RequestHash: requestHash, Status: idempotency.StatusProcessing}
+	m.records[k] = &idempotency.Record{
+		OrgID:       orgID,
+		Key:         key,
+		RequestHash: requestHash,
+		Status:      idempotency.StatusProcessing,
+		ExpiresAt:   expiresAt,
+	}
 	return nil, false, nil
 }
 
@@ -65,6 +71,16 @@ func newRequest(t *testing.T, key, body string) *http.Request {
 	return req
 }
 
+func newXRequest(t *testing.T, key, body string) *http.Request {
+	t.Helper()
+	ctx := tenant.WithID(context.Background(), "org-1")
+	req := httptest.NewRequest(http.MethodPost, "/v1/transfers", bytes.NewBufferString(body)).WithContext(ctx)
+	if key != "" {
+		req.Header.Set("X-Idempotency-Key", key)
+	}
+	return req
+}
+
 func decodeErrorCode(t *testing.T, body []byte) string {
 	t.Helper()
 	var resp struct {
@@ -78,9 +94,54 @@ func decodeErrorCode(t *testing.T, body []byte) string {
 	return resp.Error.Code
 }
 
-func TestMissingKeyReturns400(t *testing.T) {
+func TestNewKey(t *testing.T) {
 	repo := newMockRepo()
 	mw := idempotency.Middleware(repo)
+
+	called := false
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"id":"tx-new","status":"pending"}`))
+	}))
+
+	rec := httptest.NewRecorder()
+	key := uuid.New().String()
+	h.ServeHTTP(rec, newRequest(t, key, `{"amount":"100"}`))
+
+	if !called {
+		t.Fatal("expected handler to be called for new key")
+	}
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rec.Code)
+	}
+}
+
+func TestMissingKeyOptionalPasses(t *testing.T) {
+	repo := newMockRepo()
+	mw := idempotency.OptionalMiddleware(repo)
+
+	called := false
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newRequest(t, "", `{"amount":"10"}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for optional missing key, got %d", rec.Code)
+	}
+	if !called {
+		t.Fatal("handler should run when idempotency key is optional and omitted")
+	}
+}
+
+func TestMissingKeyRequiredReturns400(t *testing.T) {
+	repo := newMockRepo()
+	mw := idempotency.RequiredMiddleware(repo)
 
 	called := false
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
@@ -95,23 +156,36 @@ func TestMissingKeyReturns400(t *testing.T) {
 		t.Fatalf("expected IDEMPOTENCY_KEY_REQUIRED, got %s", code)
 	}
 	if called {
-		t.Fatal("handler should not have been called")
+		t.Fatal("handler should not run when required key is missing")
 	}
 }
 
-func TestInvalidKeyFormatReturns400(t *testing.T) {
+func TestXIdempotencyKeyHeader(t *testing.T) {
 	repo := newMockRepo()
 	mw := idempotency.Middleware(repo)
-	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, newRequest(t, "not-a-uuid", `{}`))
+	callCount := 0
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"id":"tx-x-key","status":"pending"}`))
+	}))
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
+	key := "custom-client-tx-" + uuid.New().String()
+	body := `{"from_wallet_id":"a","to_wallet_id":"b","amount":"10"}`
+
+	first := httptest.NewRecorder()
+	h.ServeHTTP(first, newXRequest(t, key, body))
+
+	second := httptest.NewRecorder()
+	h.ServeHTTP(second, newXRequest(t, key, body))
+
+	if callCount != 1 {
+		t.Fatalf("expected handler to run once for duplicate X-Idempotency-Key, ran %d times", callCount)
 	}
-	if code := decodeErrorCode(t, rec.Body.Bytes()); code != "INVALID_IDEMPOTENCY_KEY_FORMAT" {
-		t.Fatalf("expected INVALID_IDEMPOTENCY_KEY_FORMAT, got %s", code)
+	if first.Code != second.Code || first.Body.String() != second.Body.String() {
+		t.Fatalf("replayed responses differ: first=%s second=%s", first.Body.String(), second.Body.String())
 	}
 }
 
@@ -147,7 +221,7 @@ func TestSameKeySameBodyReplaysResponseByteForByte(t *testing.T) {
 	}
 }
 
-func TestSameKeyDifferentBodyReturns422(t *testing.T) {
+func TestSameKeyDifferentBodyReturns409(t *testing.T) {
 	repo := newMockRepo()
 	mw := idempotency.Middleware(repo)
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -161,20 +235,81 @@ func TestSameKeyDifferentBodyReturns422(t *testing.T) {
 	second := httptest.NewRecorder()
 	h.ServeHTTP(second, newRequest(t, key, `{"amount":"20"}`))
 
-	if second.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected 422, got %d", second.Code)
+	// Issue #151: Return 409 Conflict if the same key is used with a different request body
+	if second.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict, got %d", second.Code)
 	}
 	if code := decodeErrorCode(t, second.Body.Bytes()); code != "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_BODY" {
 		t.Fatalf("expected IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_BODY, got %s", code)
 	}
 }
 
+func TestExpiredKeyAllowsNewExecution(t *testing.T) {
+	repo := newMockRepo()
+	mw := idempotency.Middleware(repo)
+
+	callCount := 0
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"count":` + string(rune('0'+callCount)) + `}`))
+	}))
+
+	key := uuid.New().String()
+	body := `{"amount":"50"}`
+
+	// First execution
+	rec1 := httptest.NewRecorder()
+	h.ServeHTTP(rec1, newRequest(t, key, body))
+	if callCount != 1 {
+		t.Fatalf("expected 1 execution, got %d", callCount)
+	}
+
+	// Manually age the record past 24 hours to simulate TTL expiration
+	k := "org-1:" + idempotency.DeterministicKey(key)
+	repo.mu.Lock()
+	if rec, ok := repo.records[k]; ok {
+		rec.ExpiresAt = time.Now().Add(-1 * time.Hour) // expired in the past
+	}
+	repo.mu.Unlock()
+
+	// Second execution with expired key should run as a new key
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, newRequest(t, key, body))
+
+	if callCount != 2 {
+		t.Fatalf("expected handler to re-run after key expiration, got %d calls", callCount)
+	}
+	if rec2.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rec2.Code)
+	}
+}
+
+func TestDeterministicKeySHA256(t *testing.T) {
+	rawString := "order_transfer_ref_99999"
+	k1 := idempotency.DeterministicKey(rawString)
+	k2 := idempotency.DeterministicKey(rawString)
+
+	if k1 != k2 {
+		t.Fatalf("expected deterministic keys to be identical, got %q and %q", k1, k2)
+	}
+
+	// Must be a valid UUID
+	parsed, err := uuid.Parse(k1)
+	if err != nil {
+		t.Fatalf("expected valid UUID from deterministic key, got error: %v", err)
+	}
+	if parsed.Version() != 4 {
+		t.Fatalf("expected UUID v4 format, got version %d", parsed.Version())
+	}
+}
+
 func TestConcurrentRequestInProgressReturns409(t *testing.T) {
 	repo := newMockRepo()
 	key := uuid.New().String()
-	// Simulate a winning concurrent request that has already claimed the key
-	// and is still executing.
-	repo.records["org-1:"+key] = &idempotency.Record{OrgID: "org-1", Key: key, Status: idempotency.StatusProcessing}
+	dk := idempotency.DeterministicKey(key)
+	repo.records["org-1:"+dk] = &idempotency.Record{OrgID: "org-1", Key: dk, Status: idempotency.StatusProcessing}
 
 	mw := idempotency.Middleware(repo)
 	called := false
