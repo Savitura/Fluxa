@@ -3,8 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
+
+	"github.com/fluxa/fluxa/docs"
 )
 
 // DocsRouter is the minimal interface required to register documentation routes.

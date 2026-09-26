@@ -1,4 +1,4 @@
-.PHONY: run-api run-worker migrate migrate-down test lint build tidy deploy-primary deploy-secondary failover
+.PHONY: run-api run-worker migrate migrate-down test lint build tidy generate openapi-check openapi-manifest deploy-primary deploy-secondary failover
 
 # Run the API server
 run-api:
@@ -45,6 +45,14 @@ tidy:
 generate:
 	sqlc generate
 
+# Validate the published OpenAPI document against the contract rules
+openapi-check:
+	go run ./tools/openapicheck -spec docs/openapi.yaml -manifest docs/api-routes.yaml
+
+# Regenerate the route manifest from the OpenAPI document
+openapi-manifest:
+	go run ./tools/openapicheck -spec docs/openapi.yaml -manifest docs/api-routes.yaml -write-manifest
+
 # Multi-region deployment helpers. Override COMPOSE, PRIMARY_ENV, SECONDARY_ENV,
 # PROMOTE_REPLICA_CMD, and UPDATE_DNS_CMD in the deployment environment.
 deploy-primary:
@@ -84,6 +92,6 @@ docker-logs:
 	docker compose logs -f api worker
 
 # CI locally (mimics GitHub Actions)
-ci: lint test
+ci: lint test openapi-check
 	cd apps/web && npm ci && npm run lint && npm run build
 	cd sdk && npm install && npm run typecheck && npm run build

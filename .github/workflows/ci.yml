@@ -43,6 +43,32 @@ jobs:
           version: v1.61
           args: --timeout=5m
 
+  openapi:
+    name: OpenAPI contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Validate the OpenAPI document
+        run: |
+          go run ./tools/openapicheck \
+            -spec docs/openapi.yaml \
+            -manifest docs/api-routes.yaml
+
+      - name: Check the route manifest is current
+        run: |
+          go run ./tools/openapicheck -spec docs/openapi.yaml -write-manifest
+          git diff --exit-code -- docs/api-routes.yaml
+
+      - name: Test the validator
+        run: go test ./tools/openapicheck/... -count=1
+
   security:
     name: Security (gosec)
     runs-on: ubuntu-latest
