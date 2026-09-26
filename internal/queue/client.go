@@ -22,7 +22,10 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) EnqueueTransfer(ctx context.Context, txID string) error {
-	payload, err := json.Marshal(ProcessTransferPayload{TransactionID: txID})
+	payload, err := json.Marshal(ProcessTransferPayload{
+		TransactionID: txID,
+		Trace:         traceContext(ctx),
+	})
 	if err != nil {
 		return fmt.Errorf("marshal transfer payload: %w", err)
 	}
@@ -35,7 +38,11 @@ func (c *Client) EnqueueTransfer(ctx context.Context, txID string) error {
 }
 
 func (c *Client) EnqueueLedgerSync(ctx context.Context, walletID, cursor string) error {
-	payload, err := json.Marshal(SyncLedgerPayload{WalletID: walletID, Cursor: cursor})
+	payload, err := json.Marshal(SyncLedgerPayload{
+		WalletID: walletID,
+		Cursor:   cursor,
+		Trace:    traceContext(ctx),
+	})
 	if err != nil {
 		return fmt.Errorf("marshal sync payload: %w", err)
 	}
@@ -48,11 +55,32 @@ func (c *Client) EnqueueLedgerSync(ctx context.Context, walletID, cursor string)
 }
 
 func (c *Client) EnqueueWebhookDelivery(ctx context.Context, deliveryID string) error {
-	payload, err := json.Marshal(WebhookDeliverPayload{DeliveryID: deliveryID})
+	payload, err := json.Marshal(WebhookDeliverPayload{
+		DeliveryID: deliveryID,
+		Trace:      traceContext(ctx),
+	})
 	if err != nil {
 		return fmt.Errorf("marshal webhook payload: %w", err)
 	}
 	task := asynq.NewTask(TypeWebhookDeliver, payload)
+	_, err = c.inner.EnqueueContext(ctx, task,
+		asynq.MaxRetry(5),
+		asynq.Queue("default"),
+	)
+	return err
+}
+
+func (c *Client) EnqueueTenantWebhookDelivery(ctx context.Context, deliveryID, tenantID string) error {
+	payload, err := json.Marshal(WebhookDeliverPayload{
+		DeliveryID: deliveryID,
+		TenantID:   tenantID,
+		Config:     true,
+		Trace:      traceContext(ctx),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal tenant webhook payload: %w", err)
+	}
+	task := asynq.NewTask(TypeTenantWebhookDeliver, payload)
 	_, err = c.inner.EnqueueContext(ctx, task,
 		asynq.MaxRetry(5),
 		asynq.Queue("default"),

@@ -143,11 +143,11 @@ func (s *service) GetBalances(ctx context.Context, walletID string, includeFX ..
 
 	var balances []Balance
 
-	acct, err := s.stellar.LoadAccount(w.PublicKey)
+	acct, err := stellar.LoadAccountWithContext(ctx, s.stellar, w.PublicKey)
 	if err != nil {
 		hErr, ok := err.(*horizonclient.Error)
 		if ok && hErr.Response.Status == "404" {
-			// Account not yet funded on Stellar — return empty balances
+			// Account not yet funded on Stellar ΓÇö return empty balances
 			return []Balance{}, nil
 		}
 
@@ -232,7 +232,7 @@ func (s *service) ExecuteTransfer(
 		return "", err
 	}
 
-	acct, err := s.stellar.LoadAccount(w.PublicKey)
+	acct, err := stellar.LoadAccountWithContext(ctx, s.stellar, w.PublicKey)
 	if err != nil {
 		return "", fmt.Errorf("load account: %w", err)
 	}
@@ -262,7 +262,7 @@ func (s *service) ExecuteTransfer(
 		return "", fmt.Errorf("sign payment transaction: %w", err)
 	}
 
-	resp, err := s.stellar.SubmitTransaction(signedTx)
+	resp, err := stellar.SubmitTransactionWithContext(ctx, s.stellar, signedTx)
 	if err != nil {
 		return "", fmt.Errorf("submit payment to stellar: %w", err)
 	}
@@ -323,7 +323,7 @@ func (s *service) AddTrustline(ctx context.Context, walletID, assetCode, issuer,
 		return "", err
 	}
 
-	acct, err := s.stellar.LoadAccount(w.PublicKey)
+	acct, err := stellar.LoadAccountWithContext(ctx, s.stellar, w.PublicKey)
 	if err != nil {
 		return "", fmt.Errorf("load account: %w", err)
 	}
@@ -359,7 +359,7 @@ func (s *service) AddTrustline(ctx context.Context, walletID, assetCode, issuer,
 		return "", fmt.Errorf("sign trustline transaction: %w", err)
 	}
 
-	resp, err := s.stellar.SubmitTransaction(signedTx)
+	resp, err := stellar.SubmitTransactionWithContext(ctx, s.stellar, signedTx)
 	if err != nil {
 		return "", fmt.Errorf("submit trustline to stellar: %w", err)
 	}

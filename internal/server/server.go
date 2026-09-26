@@ -32,6 +32,29 @@ type Server struct {
 	http   *http.Server
 }
 
+type serverOptions struct {
+	healthHandler http.HandlerFunc
+	middlewares   []func(http.Handler) http.Handler
+}
+
+type ServerOption func(*serverOptions)
+
+func WithHealthMonitor(monitor *HealthMonitor) ServerOption {
+	return func(options *serverOptions) {
+		if monitor != nil {
+			options.healthHandler = monitor.Handler()
+		}
+	}
+}
+
+func WithMiddleware(middleware func(http.Handler) http.Handler) ServerOption {
+	return func(options *serverOptions) {
+		if middleware != nil {
+			options.middlewares = append(options.middlewares, middleware)
+		}
+	}
+}
+
 func New(
 	authHandler *auth.Handler,
 	orgHandler *org.Handler,
@@ -52,18 +75,32 @@ func New(
 	jwtSecret []byte,
 	port string,
 	healthChecks map[string]DependencyCheck,
+	opts ...ServerOption,
 ) *Server {
 	r := chi.NewRouter()
+	options := serverOptions{}
+	for _, option := range opts {
+		if option != nil {
+			option(&options)
+		}
+	}
+	healthHandler := options.healthHandler
+	if healthHandler == nil {
+		healthHandler = HealthHandler(healthChecks)
+	}
 
 	r.Use(middleware.RealIP)
 	r.Use(requestID)
+	for _, tracingMiddleware := range options.middlewares {
+		r.Use(tracingMiddleware)
+	}
 	r.Use(logger)
 	r.Use(recoverer)
 	r.Use(CORS)
 	r.Use(MaxBodySize(1 << 20))
 	r.Use(MetricsMiddleware)
 
-	r.Get("/health", HealthHandler(healthChecks))
+	r.Get("/health", healthHandler)
 	r.Get("/metrics", MetricsHandler)
 
 	r.Route("/v1", func(r chi.Router) {
@@ -106,6 +143,10 @@ func New(
 			r.Route("/webhooks", func(r chi.Router) {
 				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Post("/", webhookHandler.Register)
 				r.Get("/", webhookHandler.List)
+				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Get("/config", webhookHandler.GetConfig)
+				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Put("/config", webhookHandler.UpdateConfig)
+				r.Get("/config/deliveries", webhookHandler.ListConfigDeliveries)
+				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Post("/config/test", webhookHandler.TestConfigDelivery)
 				r.With(RequireRole(domain.RoleOwner, domain.RoleAdmin)).Delete("/{id}", webhookHandler.Delete)
 				r.Get("/{id}/deliveries", webhookHandler.ListDeliveries)
 			})

@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/hibiken/asynq"
-	"github.com/rs/zerolog/log"
 )
 
 type Worker struct {
@@ -19,18 +19,25 @@ func NewWorker(engine *Engine) *Worker {
 }
 
 func (w *Worker) HandleProcessTransfer(ctx context.Context, task *asynq.Task) error {
+	ctx = queue.ContextFromTask(ctx, task)
+	ctx, span := tracing.StartConsumer(ctx, task.Type())
+	defer span.End()
+
 	var payload queue.ProcessTransferPayload
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
 		return fmt.Errorf("unmarshal payload: %w", err)
 	}
 
-	log.Info().Str("tx_id", payload.TransactionID).Msg("processing transfer")
+	// Log through the context so every entry carries the inherited trace_id.
+	logger := tracing.Logger(ctx)
+
+	logger.Info().Str("tx_id", payload.TransactionID).Msg("processing transfer")
 
 	if err := w.engine.SubmitTransfer(ctx, payload.TransactionID); err != nil {
-		log.Error().Err(err).Str("tx_id", payload.TransactionID).Msg("transfer submission failed")
+		logger.Error().Err(err).Str("tx_id", payload.TransactionID).Msg("transfer submission failed")
 		return err
 	}
 
-	log.Info().Str("tx_id", payload.TransactionID).Msg("transfer confirmed")
+	logger.Info().Str("tx_id", payload.TransactionID).Msg("transfer confirmed")
 	return nil
 }

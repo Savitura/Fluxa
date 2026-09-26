@@ -21,14 +21,14 @@ import (
 )
 
 type Engine struct {
-	txRepo       transfer.Repository
-	walletRepo   wallet.Repository
-	feeSvc       fees.Service
-	stellar      stellar.Client
-	signer       stellar.Signer
-	network      string
-	usdcIssuer   string
-	feeWallet    string
+	txRepo     transfer.Repository
+	walletRepo wallet.Repository
+	feeSvc     fees.Service
+	stellar    stellar.Client
+	signer     stellar.Signer
+	network    string
+	usdcIssuer string
+	feeWallet  string
 }
 
 func NewEngine(
@@ -67,7 +67,7 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 		return fmt.Errorf("load source wallet: %w", err)
 	}
 
-	srcAccount, err := e.stellar.LoadAccount(srcWallet.PublicKey)
+	srcAccount, err := stellar.LoadAccountWithContext(ctx, e.stellar, srcWallet.PublicKey)
 	if err != nil {
 		return fmt.Errorf("load stellar account: %w", err)
 	}
@@ -185,7 +185,7 @@ func (e *Engine) submitWithRetry(ctx context.Context, tx *txnbuild.Transaction) 
 			}
 		}
 
-		resp, err := e.stellar.SubmitTransaction(tx)
+		resp, err := stellar.SubmitTransactionWithContext(ctx, e.stellar, tx)
 		if err == nil {
 			return &horizonTxResp{hash: resp.Hash}, nil
 		}
@@ -210,7 +210,7 @@ func (e *Engine) syncWalletBalances(ctx context.Context, w *domain.Wallet) {
 	if w == nil {
 		return
 	}
-	if acct, err := e.stellar.LoadAccount(w.PublicKey); err == nil {
+	if acct, err := stellar.LoadAccountWithContext(ctx, e.stellar, w.PublicKey); err == nil {
 		for _, b := range acct.Balances {
 			code := b.Code
 			if code == "" {
@@ -227,4 +227,3 @@ func (e *Engine) syncWalletBalances(ctx context.Context, w *domain.Wallet) {
 type horizonTxResp struct{ hash string }
 
 func (r *horizonTxResp) GetHash() string { return r.hash }
-

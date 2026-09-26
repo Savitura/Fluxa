@@ -45,10 +45,14 @@ func (m *mockRepo) List(_ context.Context, _ *string) ([]*domain.WebhookEndpoint
 	return out, nil
 }
 
-
-
-func (m *mockRepo) Delete(_ context.Context, id string) error {
-	if _, ok := m.endpoints[id]; !ok {
+func (m *mockRepo) Delete(_ context.Context, id string, tenantID *string) error {
+	ep, ok := m.endpoints[id]
+	if !ok {
+		return domain.ErrWebhookNotFound
+	}
+	// Enforce tenant isolation the same way the Postgres repo does: a scoped
+	// delete may only touch an endpoint owned by that tenant.
+	if tenantID != nil && (ep.TenantID == nil || *ep.TenantID != *tenantID) {
 		return domain.ErrWebhookNotFound
 	}
 	delete(m.endpoints, id)
@@ -85,15 +89,21 @@ func (m *mockRepo) UpdateDelivery(_ context.Context, d *domain.WebhookDelivery) 
 	return nil
 }
 
-func (m *mockRepo) GetDeliveryByID(_ context.Context, id string) (*domain.WebhookDelivery, error) {
+func (m *mockRepo) GetDeliveryByID(_ context.Context, id string, tenantID *string) (*domain.WebhookDelivery, error) {
 	d, ok := m.deliveries[id]
 	if !ok {
 		return nil, domain.ErrWebhookDeliveryNotFound
 	}
+	if tenantID != nil && d.EndpointID != "" {
+		ep := m.endpoints[d.EndpointID]
+		if ep == nil || ep.TenantID == nil || *ep.TenantID != *tenantID {
+			return nil, domain.ErrWebhookDeliveryNotFound
+		}
+	}
 	return d, nil
 }
 
-func (m *mockRepo) ListDeliveries(_ context.Context, endpointID string, _, _ int) ([]*domain.WebhookDelivery, error) {
+func (m *mockRepo) ListDeliveries(_ context.Context, endpointID string, _, _ int, _ *string) ([]*domain.WebhookDelivery, error) {
 	var out []*domain.WebhookDelivery
 	for _, d := range m.deliveries {
 		if d.EndpointID == endpointID {
@@ -226,7 +236,7 @@ func TestDispatch_FiltersByEvent(t *testing.T) {
 	}
 	repo.endpoints[ep.ID] = ep
 
-	// Dispatch transfer.settled — should not create a delivery for this endpoint.
+	// Dispatch transfer.settled ΓÇö should not create a delivery for this endpoint.
 	_ = svc.Dispatch(context.Background(), domain.EventTransferSettled, map[string]string{"id": "tx-1"})
 
 	for _, d := range repo.deliveries {

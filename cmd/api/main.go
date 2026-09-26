@@ -30,6 +30,7 @@ import (
 	"github.com/fluxa/fluxa/internal/server/idempotency"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
+	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/treasury"
 	"github.com/fluxa/fluxa/internal/wallet"
@@ -60,6 +61,20 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	tracingShutdown, err := tracing.Init(ctx, tracing.Config{
+		Enabled:          cfg.OTELEnabled,
+		ExporterEndpoint: cfg.OTELExporterEndpoint,
+		ServiceName:      cfg.OTELServiceName,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("initialize tracing")
+	}
+	defer func() {
+		if err := tracing.ShutdownWithTimeout(tracingShutdown, 5*time.Second); err != nil {
+			log.Error().Err(err).Msg("tracing shutdown")
+		}
+	}()
 
 	if err := postgres.RunMigrations(cfg.DatabaseURL, cfg.MigrationsPath); err != nil {
 		log.Fatal().Err(err).Msg("run migrations")
@@ -119,7 +134,7 @@ func main() {
 		WithIssuers(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer)
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient, tenantRepo).
 		WithStellarClient(stellarClient)
-	webhookSvc := webhook.NewService(webhookRepo, queueClient, tenantRepo)
+	webhookSvc := webhook.NewConfigService(webhookRepo, webhookRepo, queueClient, tenantRepo)
 	batchSvc := batch.NewService(batchRepo, txRepo, transferSvc)
 	scheduleSvc := schedule.NewService(scheduleRepo, walletRepo)
 
@@ -204,7 +219,7 @@ func main() {
 		decimal.Zero,
 		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 		cfg.PlatformFeeWalletPublicKey,
-	)
+	).WithDriftThreshold(reconcile.ParseDriftThreshold(cfg.ReconciliationDriftThresholdUSD))
 	reconcileHandler := reconcile.NewHandler(reconcileSvc)
 
 	authHandler := auth.NewHandler(authSvc)
@@ -246,18 +261,28 @@ func main() {
 	scheduleHandler := schedule.NewHandler(scheduleSvc)
 	treasuryHandler := treasury.NewHandler(treasurySvc).WithMutationGate(server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 
+	// Stellar Core is always reported, even when STELLAR_CORE_URL is unset: a
+	// missing Core URL is itself a degraded dependency, and omitting the key
+	// would report a healthy service that cannot settle anything.
+	healthChecks := map[string]server.DependencyCheck{
+		"database": db.Ping,
+		"redis": func(ctx context.Context) error {
+			return redisClient.Ping(ctx).Err()
+		},
+		"stellar":      server.HTTPDependencyCheck(cfg.StellarHorizonURL),
+		"stellar_core": server.StellarCoreDependencyCheck(cfg.StellarCoreURL),
+	}
+	healthMonitor := server.NewHealthMonitor(healthChecks)
+	healthMonitor.Start(ctx)
+
 	srv := server.New(
 		authHandler, orgHandler, walletHandler, transferHandler, fxHandler, fiatHandler,
 		anchorFiatHandler, anchorHandler,
 		feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo,
 		webhookHandler, batchHandler, scheduleHandler, treasuryHandler, jwtSecretBytes, cfg.Port,
-		map[string]server.DependencyCheck{
-			"database": db.Ping,
-			"redis": func(ctx context.Context) error {
-				return redisClient.Ping(ctx).Err()
-			},
-			"stellar": server.HTTPDependencyCheck(cfg.StellarHorizonURL),
-		},
+		healthChecks,
+		server.WithHealthMonitor(healthMonitor),
+		server.WithMiddleware(tracing.HTTPMiddleware),
 	)
 
 	quit := make(chan os.Signal, 1)

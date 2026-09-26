@@ -3,8 +3,9 @@ package treasury
 import (
 	"context"
 
+	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/hibiken/asynq"
-	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
 )
 
@@ -23,11 +24,18 @@ func NewWorker(svc Service) *Worker {
 // sweep_log row, even a zero-amount one, so every run leaves an audit trail.
 // Assets with auto_sweep_enabled = false are skipped entirely — flipping
 // that flag off halts the sweeper for that asset on the very next run.
-func (w *Worker) HandleSweep(ctx context.Context, _ *asynq.Task) error {
+func (w *Worker) HandleSweep(ctx context.Context, task *asynq.Task) error {
+	ctx = queue.ContextFromTask(ctx, task)
+	ctx, span := tracing.StartConsumer(ctx, task.Type())
+	defer span.End()
+
 	configs, err := w.svc.GetConfig(ctx)
 	if err != nil {
 		return err
 	}
+
+	// Log through the context so every entry carries the inherited trace_id.
+	logger := tracing.Logger(ctx)
 
 	for _, cfg := range configs {
 		if !cfg.AutoSweepEnabled {
@@ -36,7 +44,7 @@ func (w *Worker) HandleSweep(ctx context.Context, _ *asynq.Task) error {
 
 		sweepable, err := w.svc.GetSweepableAmount(ctx, cfg.Asset)
 		if err != nil {
-			log.Error().Err(err).Str("asset", cfg.Asset).Msg("treasury sweep: failed to compute sweepable amount")
+			logger.Error().Err(err).Str("asset", cfg.Asset).Msg("treasury sweep: failed to compute sweepable amount")
 			continue
 		}
 
@@ -46,7 +54,7 @@ func (w *Worker) HandleSweep(ctx context.Context, _ *asynq.Task) error {
 		}
 
 		if _, err := w.svc.ExecuteSweep(ctx, cfg.Asset, amount, cfg.ColdStorageAddress, TriggeredByAuto); err != nil {
-			log.Error().Err(err).Str("asset", cfg.Asset).Msg("treasury sweep failed")
+			logger.Error().Err(err).Str("asset", cfg.Asset).Msg("treasury sweep failed")
 		}
 	}
 

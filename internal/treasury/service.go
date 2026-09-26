@@ -55,8 +55,8 @@ type Service interface {
 	GetSweepableAmount(ctx context.Context, asset string) (decimal.Decimal, error)
 	// ExecuteSweep validates amount against the current sweepable balance,
 	// then builds, signs, and submits a payment from the fee wallet to
-	// destination. It always writes a sweep_log record — including a
-	// zero-amount audit row when amount is zero — and returns the Stellar
+	// destination. It always writes a sweep_log record ΓÇö including a
+	// zero-amount audit row when amount is zero ΓÇö and returns the Stellar
 	// tx hash (empty for a zero sweep).
 	ExecuteSweep(ctx context.Context, asset string, amount decimal.Decimal, destination, triggeredBy string) (string, error)
 	GetConfig(ctx context.Context) ([]*Config, error)
@@ -101,7 +101,7 @@ func (s *service) GetBalances(ctx context.Context) ([]AssetBalance, error) {
 		return nil, fmt.Errorf("PLATFORM_FEE_WALLET_PUBLIC_KEY is not configured")
 	}
 
-	acct, err := s.stellar.LoadAccount(s.feeWallet)
+	acct, err := stellar.LoadAccountWithContext(ctx, s.stellar, s.feeWallet)
 	if err != nil {
 		return nil, fmt.Errorf("load fee wallet account: %w", err)
 	}
@@ -125,7 +125,7 @@ func (s *service) GetBalances(ctx context.Context) ([]AssetBalance, error) {
 			if rate, err := s.fxRates.GetRates(ctx, code, "USDC"); err == nil {
 				usd = amt.Mul(rate.Rate)
 			}
-			// No provider for this pair (e.g. XLM today) — leave USD
+			// No provider for this pair (e.g. XLM today) ΓÇö leave USD
 			// equivalent at zero rather than failing the whole call.
 		}
 
@@ -138,7 +138,7 @@ func (s *service) GetBalances(ctx context.Context) ([]AssetBalance, error) {
 // Stellar's protocol requires each account to keep locked up: a fixed
 // 2*baseReserve per account plus baseReserve per trustline and per open
 // offer (Stellar "subentries"). This is a platform-wide obligation, not
-// specific to the fee wallet — it's what determines how much of the fee
+// specific to the fee wallet ΓÇö it's what determines how much of the fee
 // wallet's own XLM is actually free to sweep.
 func (s *service) GetReserveBreakdown(ctx context.Context) (*ReserveBreakdown, error) {
 	pubKeys, err := s.repo.ListWalletPublicKeys(ctx)
@@ -148,9 +148,9 @@ func (s *service) GetReserveBreakdown(ctx context.Context) (*ReserveBreakdown, e
 
 	trustlines, offers := 0, 0
 	for _, pk := range pubKeys {
-		acct, err := s.stellar.LoadAccount(pk)
+		acct, err := stellar.LoadAccountWithContext(ctx, s.stellar, pk)
 		if err != nil {
-			// Not-yet-funded or unreachable wallet — skip rather than fail
+			// Not-yet-funded or unreachable wallet ΓÇö skip rather than fail
 			// the whole reserve calculation over one bad account.
 			continue
 		}
@@ -159,7 +159,7 @@ func (s *service) GetReserveBreakdown(ctx context.Context) (*ReserveBreakdown, e
 				trustlines++
 			}
 		}
-		if offerList, err := s.stellar.Offers(pk, 200); err == nil {
+		if offerList, err := stellar.OffersWithContext(ctx, s.stellar, pk, 200); err == nil {
 			offers += len(offerList)
 		}
 	}
@@ -171,7 +171,7 @@ func (s *service) GetReserveBreakdown(ctx context.Context) (*ReserveBreakdown, e
 
 	current := decimal.Zero
 	if s.feeWallet != "" {
-		if acct, err := s.stellar.LoadAccount(s.feeWallet); err == nil {
+		if acct, err := stellar.LoadAccountWithContext(ctx, s.stellar, s.feeWallet); err == nil {
 			for _, b := range acct.Balances {
 				if b.Code == "" {
 					if amt, err := decimal.NewFromString(b.Balance); err == nil {
@@ -201,7 +201,7 @@ func (s *service) GetReserveRequirement(ctx context.Context) (decimal.Decimal, e
 }
 
 // GetSweepableAmount returns balance - (reserve_requirement + min_operating_buffer),
-// floored at zero. The reserve requirement only applies to XLM — it's a
+// floored at zero. The reserve requirement only applies to XLM ΓÇö it's a
 // Stellar-network minimum-balance concept that doesn't exist for other assets.
 func (s *service) GetSweepableAmount(ctx context.Context, asset string) (decimal.Decimal, error) {
 	cfg, err := s.repo.GetConfig(ctx, asset)
@@ -278,7 +278,7 @@ func (s *service) ExecuteSweep(ctx context.Context, asset string, amount decimal
 		return "", fmt.Errorf("parse treasury secret key: %w", err)
 	}
 
-	srcAccount, err := s.stellar.LoadAccount(s.feeWallet)
+	srcAccount, err := stellar.LoadAccountWithContext(ctx, s.stellar, s.feeWallet)
 	if err != nil {
 		return "", fmt.Errorf("load fee wallet account: %w", err)
 	}
@@ -307,7 +307,7 @@ func (s *service) ExecuteSweep(ctx context.Context, asset string, amount decimal
 		return "", fmt.Errorf("sign sweep transaction: %w", err)
 	}
 
-	resp, err := s.stellar.SubmitTransaction(stellarTx)
+	resp, err := stellar.SubmitTransactionWithContext(ctx, s.stellar, stellarTx)
 	if err != nil {
 		return "", fmt.Errorf("submit sweep transaction: %w", err)
 	}

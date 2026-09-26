@@ -11,6 +11,7 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/tenant"
+	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -36,12 +37,15 @@ func logger(next http.Handler) http.Handler {
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
 
-		zerolog.Ctx(r.Context()).Info().
+		event := zerolog.Ctx(r.Context()).Info().
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Int("status", ww.Status()).
-			Dur("latency", time.Since(start)).
-			Msg("request")
+			Dur("latency", time.Since(start))
+		if traceID := tracing.TraceIDFromContext(r.Context()); traceID != "" {
+			event = event.Str("trace_id", traceID)
+		}
+		event.Msg("request")
 	})
 }
 
@@ -154,4 +158,3 @@ func RequireNotViewer(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-

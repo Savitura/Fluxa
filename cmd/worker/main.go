@@ -18,6 +18,7 @@ import (
 	"github.com/fluxa/fluxa/internal/schedule"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
+	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/treasury"
 	"github.com/fluxa/fluxa/internal/wallet"
@@ -44,6 +45,20 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	tracingShutdown, err := tracing.Init(ctx, tracing.Config{
+		Enabled:          cfg.OTELEnabled,
+		ExporterEndpoint: cfg.OTELExporterEndpoint,
+		ServiceName:      cfg.OTELServiceName,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("initialize tracing")
+	}
+	defer func() {
+		if err := tracing.ShutdownWithTimeout(tracingShutdown, 5*time.Second); err != nil {
+			log.Error().Err(err).Msg("tracing shutdown")
+		}
+	}()
 
 	db, err := postgres.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -85,7 +100,7 @@ func main() {
 	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-worker")
 	qClient := queue.NewClient(cfg.RedisURL)
 
-	webhookSvc := webhook.NewService(webhookRepo, qClient)
+	webhookSvc := webhook.NewConfigService(webhookRepo, webhookRepo, qClient)
 	webhookWorker := webhook.NewWorker(webhookSvc)
 
 	treasurySvc := treasury.NewService(
@@ -107,6 +122,8 @@ func main() {
 		}
 	}
 
+	driftThreshold := reconcile.ParseDriftThreshold(cfg.ReconciliationDriftThresholdUSD)
+
 	reconcileSvc := reconcile.NewService(
 		txRepo,
 		reconcileRepo,
@@ -119,7 +136,7 @@ func main() {
 		balanceThreshold,
 		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 		cfg.PlatformFeeWalletPublicKey,
-	)
+	).WithDriftThreshold(driftThreshold)
 	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 
 	redisOpt, _ := asynq.ParseRedisURI(cfg.RedisURL)
@@ -139,6 +156,7 @@ func main() {
 	mux.HandleFunc(queue.TypeReconcile, reconcileWorker.HandleReconcile)
 	mux.HandleFunc(queue.TypeBalanceReconcile, reconcileWorker.HandleBalanceReconcile)
 	mux.HandleFunc(queue.TypeWebhookDeliver, webhookWorker.HandleDeliver)
+	mux.HandleFunc(queue.TypeTenantWebhookDeliver, webhookWorker.HandleDeliver)
 	mux.HandleFunc(queue.TypeRunSchedules, scheduleWorker.HandleRunSchedules)
 	mux.HandleFunc(queue.TypeTreasurySweep, treasuryWorker.HandleSweep)
 
@@ -156,15 +174,15 @@ func main() {
 		log.Fatal().Err(err).Msg("register reconcile scheduler")
 	}
 
-	// Balance reconciliation runs once a day; discrepancies are flagged only —
-	// never auto-corrected.
+	// Balance drift snapshots are refreshed hourly; discrepancies are flagged
+	// only ΓÇö never auto-corrected.
 	balanceTask := asynq.NewTask(queue.TypeBalanceReconcile, nil, asynq.Queue("low"))
-	if _, err := scheduler.Register("@daily", balanceTask); err != nil {
+	if _, err := scheduler.Register("@every 1h", balanceTask); err != nil {
 		log.Fatal().Err(err).Msg("register balance reconcile scheduler")
 	}
 
-	// Scheduled payouts are checked every minute — matches the acceptance
-	// window (fires within ±1 minute of next_run_at) without needing a
+	// Scheduled payouts are checked every minute ΓÇö matches the acceptance
+	// window (fires within ┬▒1 minute of next_run_at) without needing a
 	// dedicated ticker.
 	scheduleTask := asynq.NewTask(queue.TypeRunSchedules, nil)
 	if _, err := scheduler.Register("@every 1m", scheduleTask); err != nil {

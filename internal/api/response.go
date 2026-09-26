@@ -56,6 +56,7 @@ func HandleDomainError(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrWalletNotFound), errors.Is(err, domain.ErrTransactionNotFound),
 
 		errors.Is(err, domain.ErrWebhookNotFound), errors.Is(err, domain.ErrWebhookDeliveryNotFound),
+		errors.Is(err, domain.ErrWebhookConfigNotFound),
 		errors.Is(err, domain.ErrBatchNotFound), errors.Is(err, domain.ErrScheduleNotFound),
 		errors.Is(err, domain.ErrUserNotFound), errors.Is(err, domain.ErrOrgMemberNotFound),
 		errors.Is(err, domain.ErrInviteNotFound):
@@ -65,7 +66,7 @@ func HandleDomainError(w http.ResponseWriter, err error) {
 		errors.Is(err, domain.ErrFeeScheduleNotFound),
 		errors.Is(err, domain.ErrBatchTooLarge), errors.Is(err, domain.ErrBatchEmpty),
 		errors.Is(err, domain.ErrWalletLimitReached), errors.Is(err, domain.ErrTransferLimitReached),
-		errors.Is(err, domain.ErrWebhookLimitReached):
+		errors.Is(err, domain.ErrWebhookConfigDisabled), errors.Is(err, domain.ErrWebhookLimitReached):
 		BadRequest(w, err.Error())
 	case errors.Is(err, domain.ErrUserAlreadyExists):
 		Error(w, http.StatusConflict, "CONFLICT", err.Error())

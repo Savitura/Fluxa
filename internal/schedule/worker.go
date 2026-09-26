@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/queue"
 	"github.com/fluxa/fluxa/internal/tenant"
+	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog/log"
@@ -24,7 +26,11 @@ func NewWorker(repo Repository, transferSvc transfer.Service) *Worker {
 // HandleRunSchedules is registered against the periodic "schedule:run" task,
 // which asynq's scheduler enqueues every minute (see cmd/worker/main.go). It
 // fires every due, active schedule and advances next_run_at.
-func (w *Worker) HandleRunSchedules(ctx context.Context, _ *asynq.Task) error {
+func (w *Worker) HandleRunSchedules(ctx context.Context, task *asynq.Task) error {
+	ctx = queue.ContextFromTask(ctx, task)
+	ctx, span := tracing.StartConsumer(ctx, task.Type())
+	defer span.End()
+
 	due, err := w.repo.ListDue(ctx, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("list due schedules: %w", err)

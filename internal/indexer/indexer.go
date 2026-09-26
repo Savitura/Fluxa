@@ -59,11 +59,11 @@ func (idx *Indexer) SyncAll(ctx context.Context, limit, offset int) error {
 // operation since the wallet's stored cursor, advancing the cursor as it goes
 // so a subsequent call resumes rather than reprocessing history.
 func (idx *Indexer) SyncWallet(ctx context.Context, w *domain.Wallet) error {
-	acct, err := idx.stellar.LoadAccount(w.PublicKey)
+	acct, err := stellar.LoadAccountWithContext(ctx, idx.stellar, w.PublicKey)
 	if err != nil {
 		hErr, ok := err.(*horizonclient.Error)
 		if ok && hErr.Response.Status == "404" {
-			return nil // account not yet funded — nothing to sync
+			return nil // account not yet funded ΓÇö nothing to sync
 		}
 		return fmt.Errorf("load account: %w", err)
 	}
@@ -74,7 +74,7 @@ func (idx *Indexer) SyncWallet(ctx context.Context, w *domain.Wallet) error {
 
 	cursor := w.SyncCursor
 	for {
-		ops, err := idx.stellar.Payments(w.PublicKey, cursor, paymentsPageLimit)
+		ops, err := stellar.PaymentsWithContext(ctx, idx.stellar, w.PublicKey, cursor, paymentsPageLimit)
 		if err != nil {
 			return fmt.Errorf("fetch payments since cursor %q: %w", cursor, err)
 		}
@@ -157,7 +157,7 @@ func (idx *Indexer) StreamWallet(ctx context.Context, w *domain.Wallet) {
 		default:
 		}
 
-		err := idx.stellar.StreamPayments(ctx, w.PublicKey, cursor, func(op operations.Operation) error {
+		err := stellar.StreamPaymentsWithContext(ctx, idx.stellar, w.PublicKey, cursor, func(op operations.Operation) error {
 			if procErr := idx.processPayment(ctx, w, op); procErr != nil {
 				log.Error().Err(procErr).Str("wallet_id", w.ID).Str("op_id", op.GetID()).
 					Msg("indexer: process streamed payment failed")
