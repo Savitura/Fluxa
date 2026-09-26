@@ -14,6 +14,7 @@ type fakeRepo struct {
 	endpoints  map[string]*domain.WebhookEndpoint
 	deliveries map[string]*domain.WebhookDelivery
 	deadLetters map[string]*domain.WebhookDeadLetter
+	subscriptions map[string]*domain.WebhookSubscription
 }
 
 func newFakeRepo() *fakeRepo {
@@ -21,6 +22,7 @@ func newFakeRepo() *fakeRepo {
 		endpoints:   make(map[string]*domain.WebhookEndpoint),
 		deliveries:  make(map[string]*domain.WebhookDelivery),
 		deadLetters: make(map[string]*domain.WebhookDeadLetter),
+		subscriptions: make(map[string]*domain.WebhookSubscription),
 	}
 }
 
@@ -110,9 +112,37 @@ func (f *fakeRepo) ListDeadLetters(_ context.Context, tenantID *string, limit, o
 	return res, nil
 }
 
+func (f *fakeRepo) CreateSubscription(_ context.Context, sub *domain.WebhookSubscription) error {
+	f.subscriptions[sub.ID] = sub
+	return nil
+}
+
+func (f *fakeRepo) DeleteSubscription(_ context.Context, id string) error {
+	delete(f.subscriptions, id)
+	return nil
+}
+
+func (f *fakeRepo) ListSubscriptions(_ context.Context, tenantID *string) ([]*domain.WebhookSubscription, error) {
+	var res []*domain.WebhookSubscription
+	for _, sub := range f.subscriptions {
+		res = append(res, sub)
+	}
+	return res, nil
+}
+
+func (f *fakeRepo) GetSubscriptionsForEvent(_ context.Context, tenantID *string, eventType string) ([]*domain.WebhookSubscription, error) {
+	var res []*domain.WebhookSubscription
+	for _, sub := range f.subscriptions {
+		if sub.EventType == eventType || sub.EventType == "*" {
+			res = append(res, sub)
+		}
+	}
+	return res, nil
+}
+
 func TestWebhookService_MaxAttemptsAndDeadLetter(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(repo, nil, nil, 120)
+	svc := NewService(repo, nil, nil, 120, false)
 
 	ep, _, err := svc.RegisterEndpoint(context.Background(), "https://example.com/webhook", nil)
 	if err != nil {
@@ -160,7 +190,7 @@ func TestWebhookService_MaxAttemptsAndDeadLetter(t *testing.T) {
 
 func TestWebhookService_RetryPreservesHTTPMethod(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(repo, nil, nil, 120)
+	svc := NewService(repo, nil, nil, 120, false)
 
 	ep, _, err := svc.RegisterEndpoint(context.Background(), "https://example.com/webhook", nil)
 	if err != nil {

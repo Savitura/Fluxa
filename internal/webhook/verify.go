@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+var nowFunc = time.Now
+
 const verifyToleranceSeconds = 300
 
 // VerifyResult is the outcome of verifying one webhook delivery signature.
@@ -25,7 +27,7 @@ func Verify(secret, timestamp, body, signature string) VerifyResult {
 		return VerifyResult{Valid: false, Reason: "invalid_timestamp"}
 	}
 
-	delta := time.Now().Unix() - timestampSeconds
+	delta := nowFunc().Unix() - timestampSeconds
 	if delta < 0 {
 		delta = -delta
 	}

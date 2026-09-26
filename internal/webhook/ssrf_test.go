@@ -14,8 +14,8 @@ import (
 
 func newTestService(t *testing.T) *service {
 	t.Helper()
-	repo := newMockRepo()
-	svc, ok := NewService(repo, nil).(*service)
+	repo := newFakeRepo()
+	svc, ok := NewService(repo, nil, nil, 120, false).(*service)
 	if !ok {
 		t.Fatal("NewService did not return *service")
 	}
@@ -32,8 +32,8 @@ func TestRegister_RejectsDisallowedSchemes(t *testing.T) {
 		"javascript:alert(1)",
 	}
 	for _, raw := range schemes {
-		if _, err := svc.Register(context.Background(), raw, nil); !errors.Is(err, ErrUnsafeWebhookURL) {
-			t.Errorf("Register(%q) error = %v, want ErrUnsafeWebhookURL", raw, err)
+		if _, _, err := svc.RegisterEndpoint(context.Background(), raw, nil); !errors.Is(err, ErrUnsafeWebhookURL) {
+			t.Errorf("RegisterEndpoint(%q) error = %v, want ErrUnsafeWebhookURL", raw, err)
 		}
 	}
 }
@@ -53,8 +53,8 @@ func TestRegister_RejectsLoopbackAndPrivateDestinations(t *testing.T) {
 		"http://0.0.0.0/hook",                      // unspecified
 	}
 	for _, raw := range urls {
-		if _, err := svc.Register(context.Background(), raw, nil); !errors.Is(err, ErrUnsafeWebhookURL) {
-			t.Errorf("Register(%q) error = %v, want ErrUnsafeWebhookURL", raw, err)
+		if _, _, err := svc.RegisterEndpoint(context.Background(), raw, nil); !errors.Is(err, ErrUnsafeWebhookURL) {
+			t.Errorf("RegisterEndpoint(%q) error = %v, want ErrUnsafeWebhookURL", raw, err)
 		}
 	}
 }
@@ -62,9 +62,9 @@ func TestRegister_RejectsLoopbackAndPrivateDestinations(t *testing.T) {
 func TestRegister_AllowsPublicHTTPSDestination(t *testing.T) {
 	svc := newTestService(t)
 
-	ep, err := svc.Register(context.Background(), "https://example.com/hook", nil)
+	ep, _, err := svc.RegisterEndpoint(context.Background(), "https://example.com/hook", nil)
 	if err != nil {
-		t.Fatalf("Register() error = %v, want nil", err)
+		t.Fatalf("RegisterEndpoint() error = %v, want nil", err)
 	}
 	if ep.URL != "https://example.com/hook" {
 		t.Fatalf("URL = %q", ep.URL)
@@ -83,21 +83,21 @@ func TestDeliver_RevalidatesDestinationAtSendTime(t *testing.T) {
 		Secret: "secret",
 		Active: true,
 	}
-	svc.repo.(*mockRepo).endpoints[ep.ID] = ep
+	svc.repo.(*fakeRepo).endpoints[ep.ID] = ep
 
 	delivery := &domain.WebhookDelivery{
 		ID:         "dlv-ssrf",
 		EndpointID: ep.ID,
 		Payload:    []byte(`{}`),
 	}
-	svc.repo.(*mockRepo).deliveries[delivery.ID] = delivery
+	svc.repo.(*fakeRepo).deliveries[delivery.ID] = delivery
 
 	err := svc.Deliver(context.Background(), delivery.ID)
 	if !errors.Is(err, ErrUnsafeWebhookURL) {
 		t.Fatalf("Deliver() error = %v, want ErrUnsafeWebhookURL", err)
 	}
 
-	stored := svc.repo.(*mockRepo).deliveries[delivery.ID]
+	stored := svc.repo.(*fakeRepo).deliveries[delivery.ID]
 	if stored.Status != domain.DeliveryFailed {
 		t.Fatalf("delivery status = %s, want failed", stored.Status)
 	}

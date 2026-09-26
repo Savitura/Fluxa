@@ -43,12 +43,83 @@ tags:
     description: "Administrative endpoints (require admin key)"
   - name: "System"
     description: "Health, metrics and fiat provider webhooks"
+  - name: "Claimable balances"
+    description: "Claimable balance lookup and claiming"
 
 security:
   - BearerAuth: []
 
 paths:
-  # ── System ────────────────────────────────────────────────────────────────
+  # ── System & Documentation ────────────────────────────────────────────────
+  /:
+    get:
+      operationId: getRoot
+      summary: "API root"
+      description: "Returns API metadata and links to documentation and OpenAPI specification."
+      tags: ["System"]
+      security: []
+      responses:
+        "200":
+          description: "API metadata"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                    example: "Fluxa API"
+                  version:
+                    type: string
+                    example: "1.0.0"
+                  description:
+                    type: string
+                    example: "Multi-currency digital asset platform built on Stellar"
+                  docs_url:
+                    type: string
+                    example: "/docs"
+                  docs:
+                    type: string
+                    example: "/docs"
+                  openapi_url:
+                    type: string
+                    example: "/docs/openapi.yaml"
+                  openapi:
+                    type: string
+                    example: "/docs/openapi.yaml"
+
+  /docs:
+    get:
+      operationId: getDocs
+      summary: "Interactive Swagger UI documentation"
+      description: "Serves an interactive Swagger UI API explorer loaded from CDN."
+      tags: ["System"]
+      security: []
+      responses:
+        "200":
+          description: "Interactive Swagger UI HTML page"
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /docs/openapi.yaml:
+    get:
+      operationId: getOpenAPISpec
+      summary: "OpenAPI specification"
+      description: "Returns the raw OpenAPI 3.0 YAML specification file."
+      tags: ["System"]
+      security: []
+      responses:
+        "200":
+          description: "Raw OpenAPI 3.0 specification"
+          content:
+            application/yaml:
+              schema:
+                type: string
+        "404":
+          description: "Specification file not found"
+
   /health:
     get:
       operationId: getHealth
@@ -79,6 +150,8 @@ paths:
                 services:
                   postgres: "up"
                   redis: "down"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /metrics:
     get:
@@ -104,6 +177,10 @@ paths:
                   "OK": 140000
                   "Bad Request": 80
                   "Not Found": 40
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── Auth ──────────────────────────────────────────────────────────────────
   /v1/auth/register:
@@ -137,6 +214,8 @@ paths:
                 created_at: "2026-01-15T10:00:00Z"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/auth/login:
     post:
@@ -169,6 +248,8 @@ paths:
                 created_at: "2026-01-15T10:00:00Z"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── API Keys ──────────────────────────────────────────────────────────────
   /v1/keys:
@@ -201,6 +282,8 @@ paths:
                 created_at: "2026-01-15T10:00:00Z"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
     get:
       operationId: listAPIKeys
@@ -225,6 +308,8 @@ paths:
                   created_at: "2026-01-15T10:00:00Z"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/keys/{id}:
     delete:
@@ -241,6 +326,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── Wallets ───────────────────────────────────────────────────────────────
   /v1/wallets:
@@ -288,6 +375,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/wallets/{id}/balances:
     get:
@@ -317,6 +406,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/wallets/{id}/trustlines:
     post:
@@ -352,6 +443,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/wallets/{id}/deposit/fiat:
     post:
@@ -388,6 +481,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/wallets/{id}/withdraw/fiat:
     post:
@@ -397,6 +492,18 @@ paths:
       tags: ["Wallets"]
       parameters:
         - $ref: "#/components/parameters/WalletID"
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
       requestBody:
         required: true
         content:
@@ -422,6 +529,63 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "409":
+          description: "Conflict: request in progress or idempotency key reused with different body"
+
+  # ── Withdrawals ────────────────────────────────────────────────────────────
+  /v1/withdrawals:
+    post:
+      operationId: initiateWithdrawal
+      summary: "Initiate a withdrawal"
+      description: "Converts USDC from the wallet and sends fiat to a bank account, protected by idempotency."
+      tags: ["Wallets"]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["wallet_id", "amount", "currency", "account_bank", "account_number"]
+              properties:
+                wallet_id:
+                  type: string
+                  format: uuid
+                amount:
+                  type: string
+                currency:
+                  type: string
+                account_bank:
+                  type: string
+                account_number:
+                  type: string
+      responses:
+        "200":
+          description: "Withdrawal initiated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WithdrawalResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: "Conflict: request in progress or idempotency key reused with different body"
 
   # ── Transfers ─────────────────────────────────────────────────────────────
   /v1/transfers:
@@ -430,6 +594,19 @@ paths:
       summary: "Initiate a transfer"
       description: "Moves an asset between two wallets, applying platform fees."
       tags: ["Transfers"]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate transfers on retries"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate transfers on retries"
       requestBody:
         required: true
         content:
@@ -441,6 +618,18 @@ paths:
               to_wallet_id: "w_5e6f7g8h"
               asset: "USDC"
               amount: "100.0000000"
+      parameters:
+        - name: "Idempotency-Key"
+          in: header
+          required: true
+          description: |
+            Client-generated UUID v4 that makes this request safe to retry.
+            The result is held for 24 hours: a repeat with the same body
+            replays the original response, a repeat with a different body is
+            rejected with 422, and a concurrent repeat gets 409.
+          schema:
+            type: string
+            format: uuid
       responses:
         "202":
           description: "Transfer accepted"
@@ -465,6 +654,13 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+          description: "Conflict: request in progress or idempotency key reused with different body"
 
     get:
       operationId: listTransfers
@@ -509,6 +705,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/transfers/{id}:
     get:
@@ -534,6 +732,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── Batch Transfers ───────────────────────────────────────────────────────
   /v1/transfers/batch:
@@ -561,6 +761,18 @@ paths:
                   asset: "USDC"
                   amount: "75.0000000"
                   reference: "payroll-jan"
+      parameters:
+        - name: "Idempotency-Key"
+          in: header
+          required: true
+          description: |
+            Client-generated UUID v4 that makes this request safe to retry.
+            The result is held for 24 hours: a repeat with the same body
+            replays the original response, a repeat with a different body is
+            rejected with 422, and a concurrent repeat gets 409.
+          schema:
+            type: string
+            format: uuid
       responses:
         "202":
           description: "Batch accepted"
@@ -572,6 +784,12 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/transfers/batch/{batchId}:
     get:
@@ -597,6 +815,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/transfers/batch/{batchId}/export:
     get:
@@ -623,6 +843,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── FX ────────────────────────────────────────────────────────────────────
   /v1/fx/quote:
@@ -665,6 +887,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/fx/convert:
     post:
@@ -714,6 +938,8 @@ paths:
                 error:
                   code: "QUOTE_EXPIRED"
                   message: "quote expired"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/fx/rates:
     get:
@@ -757,6 +983,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── Schedules ─────────────────────────────────────────────────────────────
   /v1/schedules:
@@ -790,6 +1018,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
     get:
       operationId: listSchedules
@@ -810,6 +1040,8 @@ paths:
                       $ref: "#/components/schemas/ScheduleResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/schedules/{id}:
     patch:
@@ -841,6 +1073,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
     delete:
       operationId: cancelSchedule
@@ -856,6 +1090,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── Claimable balances ────────────────────────────────────────────────────
   /v1/claimable-balances:
@@ -913,6 +1149,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
     get:
       operationId: listClaimableBalances
@@ -971,6 +1209,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/claimable-balances/{id}:
     get:
@@ -995,6 +1235,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/claimable-balances/{id}/claim:
     post:
@@ -1047,6 +1289,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── Webhooks ──────────────────────────────────────────────────────────────
   /v1/webhooks:
@@ -1088,6 +1332,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
     get:
       operationId: listWebhooks
@@ -1108,6 +1354,8 @@ paths:
                       $ref: "#/components/schemas/WebhookEndpointSummary"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/webhooks/{id}:
     delete:
@@ -1124,6 +1372,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/webhooks/{id}/deliveries:
     get:
@@ -1161,6 +1411,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── Fiat provider webhooks ────────────────────────────────────────────────
   /v1/webhooks/fiat/{provider}:
@@ -1197,7 +1449,11 @@ paths:
                     type: string
                     example: "ok"
         "400":
-          description: "Webhook validation failed"
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── Fees ──────────────────────────────────────────────────────────────────
   /v1/fees:
@@ -1221,6 +1477,8 @@ paths:
                 asset: "USDC"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── Usage ─────────────────────────────────────────────────────────────────
   /v1/usage:
@@ -1238,6 +1496,8 @@ paths:
                 $ref: "#/components/schemas/UsageResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   # ── Admin ─────────────────────────────────────────────────────────────────
   /v1/admin/fees/collected:
@@ -1288,6 +1548,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/reconciliation/summary:
     get:
@@ -1334,6 +1596,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/reconciliation/run:
     post:
@@ -1362,6 +1626,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/compliance/reviews:
     get:
@@ -1413,6 +1679,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/compliance/reviews/{id}:
     get:
@@ -1440,7 +1708,9 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
-          description: "Compliance review not found"
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/compliance/reviews/{id}/approve:
     post:
@@ -1486,7 +1756,7 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
-          description: "Compliance review not found"
+          $ref: "#/components/responses/NotFound"
         "409":
           description: "Review has already been decided"
           content:
@@ -1497,6 +1767,8 @@ paths:
                 error:
                   code: "REVIEW_ALREADY_DECIDED"
                   message: "compliance review has already been decided"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/compliance/reviews/{id}/reject:
     post:
@@ -1536,9 +1808,19 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
-          description: "Compliance review not found"
+          $ref: "#/components/responses/NotFound"
         "409":
-          description: "Review has already been decided"
+          description: "Conflict"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "REVIEW_ALREADY_DECIDED"
+                  message: "compliance review has already been decided"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/compliance/sanctions-status:
     get:
@@ -1569,6 +1851,12 @@ paths:
                   entity_count: 17423
                   duration_ms: 8412
                   finished_at: "2026-01-15T03:00:12Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Components
@@ -1577,19 +1865,25 @@ components:
   # ── Security Schemes ────────────────────────────────────────────────────
   securitySchemes:
     BearerAuth:
-      type: apiKey
-      in: header
-      name: Authorization
+      type: http
+      scheme: bearer
+      bearerFormat: token
       description: |
-        Pass a tenant API key as `Bearer <key>` in the `Authorization` header.
-        Keys are prefixed with `sk_live_` (production) or `sk_test_` (sandbox).
+        Pass a tenant API key (`sk_live_...` or `sk_test_...`) or JWT bearer token.
+        In Swagger UI, enter your token in the Authorize dialog (the 'Bearer ' prefix is added automatically).
     AdminAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: token
+      description: |
+        Pass an admin API key (`sk_admin_...`).
+        In Swagger UI, enter your admin key in the Authorize dialog (the 'Bearer ' prefix is added automatically).
+    ApiKeyAuth:
       type: apiKey
       in: header
       name: Authorization
       description: |
-        Pass an admin API key as `Bearer <key>`. Admin keys are prefixed with
-        `sk_admin_`.
+        Pass an API key as `Bearer <key>` in the `Authorization` header.
 
   # ── Parameters ──────────────────────────────────────────────────────────
   parameters:
@@ -1649,9 +1943,11 @@ components:
       content:
         application/json:
           schema:
-            type: object
+            $ref: "#/components/schemas/ErrorResponse"
           example:
-            error: "missing or invalid authorization header"
+            error:
+              code: "UNAUTHORIZED"
+              message: "missing or invalid authorization header"
     NotFound:
       description: "Resource not found"
       content:
@@ -1667,11 +1963,31 @@ components:
       content:
         application/json:
           schema:
-            type: object
+            $ref: "#/components/schemas/ErrorResponse"
           example:
             error:
               code: "FORBIDDEN"
               message: "admin access required"
+    Conflict:
+      description: "Conflict — a request with this Idempotency-Key is still in flight"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "REQUEST_IN_PROGRESS"
+              message: "a request with this Idempotency-Key is still in progress"
+    UnprocessableEntity:
+      description: "Unprocessable — the Idempotency-Key was reused with a different body"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_BODY"
+              message: "this Idempotency-Key was already used with a different request body"
     InternalServerError:
       description: "Internal server error"
       content:
@@ -1777,6 +2093,10 @@ components:
                 - "INTERNAL_ERROR"
                 - "QUOTE_EXPIRED"
                 - "QUOTE_ALREADY_USED"
+                - "REVIEW_ALREADY_DECIDED"
+                - "CLAIMABLE_BALANCE_NOT_PENDING"
+                - "REQUEST_IN_PROGRESS"
+                - "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_BODY"
               description: "Machine-readable error code"
             message:
               type: string

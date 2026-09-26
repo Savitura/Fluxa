@@ -26,7 +26,11 @@ func requestID(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", id)
 		next.ServeHTTP(w, r.WithContext(
-			log.Logger.With().Str("request_id", id).Logger().WithContext(r.Context()),
+			log.Logger.With().
+				Str("request_id", id).
+				Str("operation", "http_request").
+				Logger().
+				WithContext(r.Context()),
 		))
 	})
 }
@@ -41,11 +45,8 @@ func logger(next http.Handler) http.Handler {
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Int("status", ww.Status()).
-			Dur("latency", time.Since(start))
-		if traceID := tracing.TraceIDFromContext(r.Context()); traceID != "" {
-			event = event.Str("trace_id", traceID)
-		}
-		event.Msg("request")
+			Dur("duration", time.Since(start)).
+			Msg("request")
 	})
 }
 
@@ -144,6 +145,10 @@ func AuthMiddleware(repo *postgres.APIKeyRepo, jwtSecret []byte, validator Membe
 					}
 					ctx := tenant.WithID(r.Context(), claims.TenantID)
 					ctx = tenant.WithUser(ctx, claims.Sub, claims.Role)
+					requestLogger := zerolog.Ctx(ctx).With().
+						Str("tenant_id", claims.TenantID).
+						Logger()
+					ctx = requestLogger.WithContext(ctx)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -165,6 +170,10 @@ func AuthMiddleware(repo *postgres.APIKeyRepo, jwtSecret []byte, validator Membe
 
 			ctx := tenant.WithID(r.Context(), key.TenantID)
 			ctx = tenant.WithUser(ctx, "", domain.RoleAdmin)
+			requestLogger := zerolog.Ctx(ctx).With().
+				Str("tenant_id", key.TenantID).
+				Logger()
+			ctx = requestLogger.WithContext(ctx)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

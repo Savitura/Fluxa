@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/fx"
@@ -23,6 +24,24 @@ type mockRepository struct {
 	deposits    map[string]*domain.FiatDeposit
 	withdrawals map[string]*domain.FiatWithdrawal
 	createErr   error
+}
+
+type mockWebhookEventRepository struct {
+	mu     sync.Mutex
+	events map[string]time.Time
+	claims int
+}
+
+func (m *mockWebhookEventRepository) ClaimWebhookEvent(_ context.Context, provider, eventID string, expiresAt time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := provider + ":" + eventID
+	if existing, ok := m.events[key]; ok && existing.After(time.Now()) {
+		return false, nil
+	}
+	m.events[key] = expiresAt
+	m.claims++
+	return true, nil
 }
 
 func newMockRepository() *mockRepository {
@@ -456,6 +475,39 @@ func TestHandleWebhook_Deposit_Success(t *testing.T) {
 	}
 	if repo.deposits["deposit-REF-1"].Status != domain.FiatStatusCompleted {
 		t.Errorf("expected deposit status completed, got %s", repo.deposits["deposit-REF-1"].Status)
+	}
+}
+
+func TestHandleWebhook_DuplicateEventIsClaimedOnceWithSevenDayTTL(t *testing.T) {
+	repo := newMockRepository()
+	seedPendingDeposit(repo, "REF-1", decimal.NewFromInt(16000), "NGN")
+	events := &mockWebhookEventRepository{events: make(map[string]time.Time)}
+	transferSvc := &mockTransferService{}
+	rail := &mockRail{webhookEvt: &RailEvent{
+		Type:        EventDepositConfirmed,
+		EventID:     "flutterwave-event-1",
+		ProviderRef: "REF-1",
+		Status:      "completed",
+		Amount:      decimal.NewFromInt(16000),
+		Currency:    "NGN",
+	}}
+	svc := NewService(repo, rail, &mockFXService{}, transferSvc, "platform-wallet-123", "flutterwave", events)
+
+	if err := svc.HandleWebhook(context.Background(), []byte("{}"), "sig"); err != nil {
+		t.Fatalf("unexpected error on first delivery: %v", err)
+	}
+	if err := svc.HandleWebhook(context.Background(), []byte("{}"), "sig"); err != nil {
+		t.Fatalf("unexpected error on duplicate delivery: %v", err)
+	}
+
+	if events.claims != 1 {
+		t.Fatalf("expected one event claim, got %d", events.claims)
+	}
+	if expiresAt := events.events["flutterwave:flutterwave-event-1"]; time.Until(expiresAt) < 6*24*time.Hour {
+		t.Fatalf("expected approximately seven-day TTL, expires at %s", expiresAt)
+	}
+	if len(transferSvc.transfers) != 1 {
+		t.Fatalf("expected exactly one transfer, got %d", len(transferSvc.transfers))
 	}
 }
 

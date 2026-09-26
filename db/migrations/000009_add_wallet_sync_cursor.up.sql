@@ -1,1 +1,0 @@
-ALTER TABLE wallets ADD COLUMN sync_cursor TEXT NOT NULL DEFAULT '';

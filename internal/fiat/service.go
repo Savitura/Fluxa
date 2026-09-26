@@ -27,6 +27,10 @@ type Repository interface {
 	GetWithdrawalByReference(ctx context.Context, ref string) (*domain.FiatWithdrawal, error)
 }
 
+type WebhookEventRepository interface {
+	ClaimWebhookEvent(ctx context.Context, provider, eventID string, expiresAt time.Time) (bool, error)
+}
+
 type Service interface {
 	InitiateDeposit(ctx context.Context, req DepositRequest) (*DepositResponse, error)
 	InitiateWithdrawal(ctx context.Context, req WithdrawRequest) (*WithdrawResponse, error)
@@ -35,6 +39,7 @@ type Service interface {
 
 type service struct {
 	repo             Repository
+	eventRepo        WebhookEventRepository
 	rail             Rail
 	fxSvc            fx.Service
 	transferSvc      transfer.Service
@@ -42,9 +47,14 @@ type service struct {
 	providerName     string
 }
 
-func NewService(repo Repository, rail Rail, fxSvc fx.Service, transferSvc transfer.Service, platformWalletID, providerName string) Service {
+func NewService(repo Repository, rail Rail, fxSvc fx.Service, transferSvc transfer.Service, platformWalletID, providerName string, eventRepos ...WebhookEventRepository) Service {
+	var eventRepo WebhookEventRepository
+	if len(eventRepos) > 0 {
+		eventRepo = eventRepos[0]
+	}
 	return &service{
 		repo:             repo,
+		eventRepo:        eventRepo,
 		rail:             rail,
 		fxSvc:            fxSvc,
 		transferSvc:      transferSvc,
@@ -156,6 +166,16 @@ func (s *service) HandleWebhook(ctx context.Context, payload []byte, signature s
 			)
 		}
 
+		if s.eventRepo != nil && evt.EventID != "" {
+			claimed, err := s.eventRepo.ClaimWebhookEvent(ctx, s.providerName, evt.EventID, time.Now().UTC().Add(7*24*time.Hour))
+			if err != nil {
+				return fmt.Errorf("claim webhook event: %w", err)
+			}
+			if !claimed {
+				return nil
+			}
+		}
+
 		// Atomically claim the deposit BEFORE moving any funds. This is
 		// what makes a concurrent or duplicate webhook delivery for the
 		// same event safe: only the caller that wins this pending ->
@@ -187,6 +207,16 @@ func (s *service) HandleWebhook(ctx context.Context, payload []byte, signature s
 
 		if withdrawal.Status != domain.FiatStatusPending {
 			return nil
+		}
+
+		if s.eventRepo != nil && evt.EventID != "" {
+			claimed, err := s.eventRepo.ClaimWebhookEvent(ctx, s.providerName, evt.EventID, time.Now().UTC().Add(7*24*time.Hour))
+			if err != nil {
+				return fmt.Errorf("claim webhook event: %w", err)
+			}
+			if !claimed {
+				return nil
+			}
 		}
 
 		if evt.Status == "completed" {

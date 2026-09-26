@@ -1,0 +1,2 @@
+ALTER TABLE schedules ADD COLUMN timezone VARCHAR(255) NOT NULL DEFAULT 'UTC';
+ALTER TABLE schedules ADD COLUMN missed_run_policy VARCHAR(50) NOT NULL DEFAULT 'run_once';
