@@ -89,8 +89,14 @@ func (h *Handler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.UpdateRole(r.Context(), targetUserID, req.Role); err != nil {
-		if errors.Is(err, domain.ErrOrgMemberNotFound) {
+		if errors.Is(err, domain.ErrOrgMemberNotFound) || errors.Is(err, domain.ErrOrgNotFound) {
 			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, domain.ErrLastOrgOwner) {
+			// The request is well-formed but conflicts with the tenant's current
+			// state: it would leave the organization without an owner.
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -105,8 +111,12 @@ func (h *Handler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	targetUserID := chi.URLParam(r, "userId")
 
 	if err := h.svc.RemoveMember(r.Context(), targetUserID); err != nil {
-		if errors.Is(err, domain.ErrOrgMemberNotFound) {
+		if errors.Is(err, domain.ErrOrgMemberNotFound) || errors.Is(err, domain.ErrOrgNotFound) {
 			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, domain.ErrLastOrgOwner) {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)

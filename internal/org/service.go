@@ -206,7 +206,9 @@ func (s *service) UpdateRole(ctx context.Context, targetUserID, newRole string) 
 		return errors.New("invalid role")
 	}
 
-	return s.orgRepo.UpdateMemberRole(ctx, tenantID, targetUserID, newRole)
+	// The repository refuses to demote the tenant's last owner and records the
+	// attempt; promote a second owner, or transfer ownership, first.
+	return s.orgRepo.UpdateMemberRole(ctx, tenantID, tenant.UserIDFromContext(ctx), targetUserID, newRole)
 }
 
 func (s *service) RemoveMember(ctx context.Context, targetUserID string) error {
@@ -215,5 +217,7 @@ func (s *service) RemoveMember(ctx context.Context, targetUserID string) error {
 		return errors.New("tenant not found in context")
 	}
 
-	return s.orgRepo.RemoveMember(ctx, tenantID, targetUserID)
+	// Removing the last owner is refused with domain.ErrLastOrgOwner, which the
+	// handler maps to 409 CONFLICT.
+	return s.orgRepo.RemoveMember(ctx, tenantID, tenant.UserIDFromContext(ctx), targetUserID)
 }
