@@ -19,6 +19,7 @@ type Record struct {
 	Status         string
 	ResponseStatus int
 	ResponseBody   []byte
+	ExpiresAt      time.Time
 }
 
 // Repository persists idempotency records scoped by (org_id, key).

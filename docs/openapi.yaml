@@ -50,7 +50,76 @@ security:
   - BearerAuth: []
 
 paths:
-  # ── System ────────────────────────────────────────────────────────────────
+  # ── System & Documentation ────────────────────────────────────────────────
+  /:
+    get:
+      operationId: getRoot
+      summary: "API root"
+      description: "Returns API metadata and links to documentation and OpenAPI specification."
+      tags: ["System"]
+      security: []
+      responses:
+        "200":
+          description: "API metadata"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                    example: "Fluxa API"
+                  version:
+                    type: string
+                    example: "1.0.0"
+                  description:
+                    type: string
+                    example: "Multi-currency digital asset platform built on Stellar"
+                  docs_url:
+                    type: string
+                    example: "/docs"
+                  docs:
+                    type: string
+                    example: "/docs"
+                  openapi_url:
+                    type: string
+                    example: "/docs/openapi.yaml"
+                  openapi:
+                    type: string
+                    example: "/docs/openapi.yaml"
+
+  /docs:
+    get:
+      operationId: getDocs
+      summary: "Interactive Swagger UI documentation"
+      description: "Serves an interactive Swagger UI API explorer loaded from CDN."
+      tags: ["System"]
+      security: []
+      responses:
+        "200":
+          description: "Interactive Swagger UI HTML page"
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /docs/openapi.yaml:
+    get:
+      operationId: getOpenAPISpec
+      summary: "OpenAPI specification"
+      description: "Returns the raw OpenAPI 3.0 YAML specification file."
+      tags: ["System"]
+      security: []
+      responses:
+        "200":
+          description: "Raw OpenAPI 3.0 specification"
+          content:
+            application/yaml:
+              schema:
+                type: string
+        "404":
+          description: "Specification file not found"
+
   /health:
     get:
       operationId: getHealth
@@ -423,6 +492,18 @@ paths:
       tags: ["Wallets"]
       parameters:
         - $ref: "#/components/parameters/WalletID"
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
       requestBody:
         required: true
         content:
@@ -450,6 +531,61 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalServerError"
+        "409":
+          description: "Conflict: request in progress or idempotency key reused with different body"
+
+  # ── Withdrawals ────────────────────────────────────────────────────────────
+  /v1/withdrawals:
+    post:
+      operationId: initiateWithdrawal
+      summary: "Initiate a withdrawal"
+      description: "Converts USDC from the wallet and sends fiat to a bank account, protected by idempotency."
+      tags: ["Wallets"]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate withdrawals on network retries"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["wallet_id", "amount", "currency", "account_bank", "account_number"]
+              properties:
+                wallet_id:
+                  type: string
+                  format: uuid
+                amount:
+                  type: string
+                currency:
+                  type: string
+                account_bank:
+                  type: string
+                account_number:
+                  type: string
+      responses:
+        "200":
+          description: "Withdrawal initiated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WithdrawalResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: "Conflict: request in progress or idempotency key reused with different body"
 
   # ── Transfers ─────────────────────────────────────────────────────────────
   /v1/transfers:
@@ -458,6 +594,19 @@ paths:
       summary: "Initiate a transfer"
       description: "Moves an asset between two wallets, applying platform fees."
       tags: ["Transfers"]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate transfers on retries"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: "Optional idempotency key to prevent duplicate transfers on retries"
       requestBody:
         required: true
         content:
@@ -511,6 +660,7 @@ paths:
           $ref: "#/components/responses/UnprocessableEntity"
         "500":
           $ref: "#/components/responses/InternalServerError"
+          description: "Conflict: request in progress or idempotency key reused with different body"
 
     get:
       operationId: listTransfers
@@ -1715,19 +1865,25 @@ components:
   # ── Security Schemes ────────────────────────────────────────────────────
   securitySchemes:
     BearerAuth:
-      type: apiKey
-      in: header
-      name: Authorization
+      type: http
+      scheme: bearer
+      bearerFormat: token
       description: |
-        Pass a tenant API key as `Bearer <key>` in the `Authorization` header.
-        Keys are prefixed with `sk_live_` (production) or `sk_test_` (sandbox).
+        Pass a tenant API key (`sk_live_...` or `sk_test_...`) or JWT bearer token.
+        In Swagger UI, enter your token in the Authorize dialog (the 'Bearer ' prefix is added automatically).
     AdminAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: token
+      description: |
+        Pass an admin API key (`sk_admin_...`).
+        In Swagger UI, enter your admin key in the Authorize dialog (the 'Bearer ' prefix is added automatically).
+    ApiKeyAuth:
       type: apiKey
       in: header
       name: Authorization
       description: |
-        Pass an admin API key as `Bearer <key>`. Admin keys are prefixed with
-        `sk_admin_`.
+        Pass an API key as `Bearer <key>` in the `Authorization` header.
 
   # ── Parameters ──────────────────────────────────────────────────────────
   parameters:

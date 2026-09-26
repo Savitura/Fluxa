@@ -1,8 +1,8 @@
 // Package idempotency implements request deduplication for state-mutating
-// endpoints via the Idempotency-Key header, following the same pattern as
-// Stripe/Adyen: a client-supplied UUID v4 key scopes a request so that a
-// retry (e.g. after a timed-out response) replays the original result
-// instead of re-executing the handler.
+// endpoints via the X-Idempotency-Key and Idempotency-Key headers, following the
+// pattern used by modern payment APIs: a client-supplied key scopes a request
+// so that a retry (e.g. after a network timeout) replays the original result
+// instead of re-executing the handler and creating duplicate transactions.
 package idempotency
 
 import (
@@ -19,28 +19,48 @@ import (
 )
 
 const (
-	headerKey = "Idempotency-Key"
-	ttl       = 24 * time.Hour
+	headerKey  = "Idempotency-Key"
+	xHeaderKey = "X-Idempotency-Key"
+	ttl        = 24 * time.Hour
 )
 
-// Middleware returns chi/http middleware that enforces idempotency-key
-// semantics for the route(s) it wraps. It is applied selectively — only to
-// the state-mutating routes that require it — by each handler package's
-// Routes() method, not globally.
+// Options controls middleware behavior for idempotency enforcement.
+type Options struct {
+	// Required specifies whether the request must supply an idempotency key.
+	// If false, requests without an idempotency key proceed normally without deduplication.
+	Required bool
+}
+
+// Middleware returns middleware with optional idempotency-key semantics.
 func Middleware(repo Repository) func(http.Handler) http.Handler {
+	return MiddlewareWithOptions(repo, Options{Required: false})
+}
+
+// OptionalMiddleware returns middleware where the idempotency key is optional.
+func OptionalMiddleware(repo Repository) func(http.Handler) http.Handler {
+	return MiddlewareWithOptions(repo, Options{Required: false})
+}
+
+// RequiredMiddleware returns middleware where the idempotency key is required.
+func RequiredMiddleware(repo Repository) func(http.Handler) http.Handler {
+	return MiddlewareWithOptions(repo, Options{Required: true})
+}
+
+// MiddlewareWithOptions returns middleware configured with the specified options.
+func MiddlewareWithOptions(repo Repository, opts Options) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			key := r.Header.Get(headerKey)
-			if key == "" {
-				api.Error(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key header is required for this endpoint")
+			rawKey := ExtractKey(r)
+			if rawKey == "" {
+				if opts.Required {
+					api.Error(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key header is required for this endpoint")
+					return
+				}
+				next.ServeHTTP(w, r)
 				return
 			}
 
-			parsed, err := uuid.Parse(key)
-			if err != nil || parsed.Version() != 4 {
-				api.Error(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY_FORMAT", "Idempotency-Key must be a valid UUID v4")
-				return
-			}
+			key := DeterministicKey(rawKey)
 
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
@@ -63,7 +83,8 @@ func Middleware(repo Repository) func(http.Handler) http.Handler {
 				case rec.Status == StatusProcessing:
 					api.Error(w, http.StatusConflict, "REQUEST_IN_PROGRESS", "a request with this idempotency key is already being processed")
 				case rec.RequestHash != hash:
-					api.UnprocessableEntity(w, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_BODY", "this idempotency key was previously used with a different request body")
+					// Issue #151: Return 409 Conflict if the same key is used with a different request body
+					api.Error(w, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_BODY", "this idempotency key was previously used with a different request body")
 				default:
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(rec.ResponseStatus)
@@ -77,6 +98,35 @@ func Middleware(repo Repository) func(http.Handler) http.Handler {
 			_ = repo.Complete(r.Context(), orgID, key, rec2.status, rec2.body)
 		})
 	}
+}
+
+// ExtractKey reads the idempotency key from X-Idempotency-Key or Idempotency-Key header.
+func ExtractKey(r *http.Request) string {
+	if k := r.Header.Get(xHeaderKey); k != "" {
+		return k
+	}
+	if k := r.Header.Get(headerKey); k != "" {
+		return k
+	}
+	return ""
+}
+
+// DeterministicKey returns a valid UUID string derived deterministically from raw.
+// If raw is already a valid UUID v4, it is normalized and returned directly.
+// Otherwise, it generates a deterministic RFC 4122 v4 UUID using SHA-256 of raw.
+func DeterministicKey(raw string) string {
+	if parsed, err := uuid.Parse(raw); err == nil && parsed.Version() == 4 {
+		return parsed.String()
+	}
+
+	sum := sha256.Sum256([]byte(raw))
+	u, err := uuid.FromBytes(sum[:16])
+	if err != nil {
+		return uuid.NewSHA1(uuid.NameSpaceOID, []byte(raw)).String()
+	}
+	u[6] = (u[6] & 0x0f) | 0x40 // Version 4
+	u[8] = (u[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return u.String()
 }
 
 func requestHash(method, path string, body []byte) string {

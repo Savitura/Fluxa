@@ -101,7 +101,11 @@ func (h *Handler) initiateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.svc.InitiateTransferIdempotent(r.Context(), req.FromWalletID, req.ToWalletID, req.Asset, amount, r.Header.Get("Idempotency-Key"))
+	idempotencyKey := r.Header.Get("X-Idempotency-Key")
+	if idempotencyKey == "" {
+		idempotencyKey = r.Header.Get("Idempotency-Key")
+	}
+	tx, err := h.svc.InitiateTransferIdempotent(r.Context(), req.FromWalletID, req.ToWalletID, req.Asset, amount, idempotencyKey)
 	if err != nil {
 		api.HandleDomainError(w, err)
 		return

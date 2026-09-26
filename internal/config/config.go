@@ -13,6 +13,7 @@ type Config struct {
 	Port                        string
 	CORSAllowedOrigins          []string
 	Env                         string
+	LogLevel                    string
 	DatabaseURL                 string
 	ReplicaDatabaseURL          string
 	RedisURL                    string
@@ -73,6 +74,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("PORT", "3000")
 	viper.SetDefault("CORS_ALLOWED_ORIGINS", "localhost:*")
 	viper.SetDefault("ENV", "development")
+	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("STELLAR_NETWORK", "testnet")
 	viper.SetDefault("STELLAR_HORIZON_URL", "https://horizon-testnet.stellar.org")
 	viper.SetDefault("MIGRATIONS_PATH", "db/migrations")
@@ -129,6 +131,7 @@ func Load() (*Config, error) {
 		Port:                        viper.GetString("PORT"),
 		CORSAllowedOrigins:          splitCSV(viper.GetString("CORS_ALLOWED_ORIGINS")),
 		Env:                         env,
+		LogLevel:                    viper.GetString("LOG_LEVEL"),
 		DatabaseURL:                 viper.GetString("DATABASE_URL"),
 		ReplicaDatabaseURL:          viper.GetString("REPLICA_DATABASE_URL"),
 		RedisURL:                    viper.GetString("REDIS_URL"),

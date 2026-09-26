@@ -24,6 +24,8 @@ var (
 	ErrBatchTooLarge                = errors.New("batch cannot contain more than 100 transfers")
 	ErrBatchEmpty                   = errors.New("batch must contain at least one transfer")
 	ErrScheduleNotFound             = errors.New("schedule not found")
+	ErrScheduleRunNotFound          = errors.New("schedule run not found")
+	ErrIncidentNotFound             = errors.New("incident not found")
 	ErrUserNotFound                 = errors.New("user not found")
 	ErrUserAlreadyExists            = errors.New("user with this email already exists")
 	ErrInvalidCredentials           = errors.New("invalid email or password")
@@ -62,6 +64,21 @@ var (
 	ErrSourceWalletRequired       = errors.New("a source wallet is required to fund a claimable balance")
 	ErrSponsorNotCustodied        = errors.New("sponsor account is not a wallet custodied by Fluxa")
 	ErrInvalidAmount              = errors.New("amount must be a positive number")
+)
+
+// Organization membership. Kept in its own block: appending to the var block
+// above would re-align every line in it, burying the change in noise.
+var (
+	// ErrLastOrgOwner rejects a role change or removal that would leave the
+	// tenant with no owner. Callers surface it as 409 CONFLICT: the request is
+	// well-formed in itself, it conflicts with the tenant's current state, and it
+	// succeeds once an owner is promoted or ownership is transferred.
+	ErrLastOrgOwner = errors.New("organization must keep at least one owner")
+
+	// ErrOrgNotFound is returned when the tenant row a membership change locks
+	// has gone away — the organization was deleted between the request
+	// authenticating and the change being applied.
+	ErrOrgNotFound = errors.New("organization not found")
 )
 
 type ErrNoTrustline struct {

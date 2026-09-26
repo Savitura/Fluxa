@@ -23,6 +23,7 @@ import (
 	"github.com/fluxa/fluxa/internal/fiat/flutterwave"
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/indexer"
+	"github.com/fluxa/fluxa/internal/logging"
 	"github.com/fluxa/fluxa/internal/org"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
@@ -39,7 +40,6 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
 )
@@ -48,18 +48,16 @@ func main() {
 	migrateOnly := flag.Bool("migrate-only", false, "run migrations and exit")
 	flag.Parse()
 
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
-
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal().Err(err).Msg("load config")
 	}
 
-	if cfg.Env == "development" {
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	} else {
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	logger, err := logging.New(os.Stdout, cfg.LogLevel)
+	if err != nil {
+		log.Fatal().Err(err).Msg("configure logger")
 	}
+	log.Logger = logger
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -204,7 +202,7 @@ func main() {
 	// per-request provider selection yet.
 	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
 
-	fiatSvc := fiat.NewService(fiatRepo, fiat.NewRailAdapter(fwProvider), fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
+	fiatSvc := fiat.NewService(fiatRepo, fiat.NewRailAdapter(fwProvider), fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave", fiatRepo)
 
 	anchorRegistry := anchor.NewRegistry(anchorRepo, nil)
 	if err := anchorRegistry.Load(ctx); err != nil {
@@ -248,6 +246,7 @@ func main() {
 		},
 	})
 	asynqMux := asynq.NewServeMux()
+	asynqMux.Use(logging.WorkerMiddleware(log.Logger))
 	asynqMux.HandleFunc(queue.TypeProcessTransfer, settlementWorker.HandleProcessTransfer)
 	asynqMux.HandleFunc(queue.TypeSyncLedger, indexerWorker.HandleSyncLedger)
 
@@ -305,7 +304,7 @@ func main() {
 	}
 	transferHandler := transfer.NewHandler(transferSvc).WithIdempotency(idemMW)
 	fxHandler := fx.NewHandler(fxSvc).WithIdempotency(idemMW)
-	fiatHandler := fiat.NewHandler(fiatSvc)
+	fiatHandler := fiat.NewHandler(fiatSvc).WithIdempotency(idemMW)
 	anchorFiatHandler := fiat.NewAnchorHandler(anchorFiatSvc)
 	anchorHandler := anchor.NewHandler(anchorRegistry)
 	feeHandler := fees.NewHandler(feeSvc)
