@@ -50,7 +50,7 @@ func (m *mockOrgRepo) ListMembers(ctx context.Context, tenantID string) ([]*doma
 	return list, nil
 }
 
-func (m *mockOrgRepo) UpdateMemberRole(ctx context.Context, tenantID, userID, newRole string) error {
+func (m *mockOrgRepo) UpdateMemberRole(ctx context.Context, tenantID, actorUserID, userID, newRole string) error {
 	mem, ok := m.members[tenantID+":"+userID]
 	if !ok {
 		return domain.ErrOrgMemberNotFound
@@ -59,7 +59,7 @@ func (m *mockOrgRepo) UpdateMemberRole(ctx context.Context, tenantID, userID, ne
 	return nil
 }
 
-func (m *mockOrgRepo) RemoveMember(ctx context.Context, tenantID, userID string) error {
+func (m *mockOrgRepo) RemoveMember(ctx context.Context, tenantID, actorUserID, userID string) error {
 	key := tenantID + ":" + userID
 	if _, ok := m.members[key]; !ok {
 		return domain.ErrOrgMemberNotFound

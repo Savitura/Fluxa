@@ -66,6 +66,21 @@ var (
 	ErrInvalidAmount              = errors.New("amount must be a positive number")
 )
 
+// Organization membership. Kept in its own block: appending to the var block
+// above would re-align every line in it, burying the change in noise.
+var (
+	// ErrLastOrgOwner rejects a role change or removal that would leave the
+	// tenant with no owner. Callers surface it as 409 CONFLICT: the request is
+	// well-formed in itself, it conflicts with the tenant's current state, and it
+	// succeeds once an owner is promoted or ownership is transferred.
+	ErrLastOrgOwner = errors.New("organization must keep at least one owner")
+
+	// ErrOrgNotFound is returned when the tenant row a membership change locks
+	// has gone away — the organization was deleted between the request
+	// authenticating and the change being applied.
+	ErrOrgNotFound = errors.New("organization not found")
+)
+
 type ErrNoTrustline struct {
 	Asset string
 }
