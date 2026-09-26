@@ -2,13 +2,15 @@ package server
 
 import (
 	"net/http"
-	"os"
-	"path/filepath"
+
+	"github.com/fluxa/fluxa/docs"
 )
 
 // RegisterDocsRoutes serves Swagger UI at /docs and the OpenAPI spec at
 // /docs/openapi.yaml (#152).
-func RegisterDocsRoutes(r interface{ Get(string, http.HandlerFunc) }) {
+func RegisterDocsRoutes(r interface {
+	Get(string, http.HandlerFunc)
+}) {
 	r.Get("/docs", serveSwaggerUI)
 	r.Get("/docs/", serveSwaggerUI)
 	r.Get("/docs/openapi.yaml", serveOpenAPISpec)
@@ -19,16 +21,12 @@ func serveSwaggerUI(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte(swaggerHTML))
 }
 
-func serveOpenAPISpec(w http.ResponseWriter, r *http.Request) {
-	// Try to read from docs/openapi.yaml relative to the working directory
-	path := filepath.Join("docs", "openapi.yaml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		http.Error(w, "OpenAPI spec not found", http.StatusNotFound)
-		return
-	}
+func serveOpenAPISpec(w http.ResponseWriter, _ *http.Request) {
+	// Embedded rather than read from disk: this must be the same document CI
+	// validated, and a process started outside the repository root used to
+	// answer 404 here.
 	w.Header().Set("Content-Type", "application/yaml")
-	w.Write(data)
+	w.Write(docs.OpenAPIYAML)
 }
 
 const swaggerHTML = `<!DOCTYPE html>
