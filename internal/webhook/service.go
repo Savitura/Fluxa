@@ -49,7 +49,7 @@ type Service interface {
 	ListDeadLetters(ctx context.Context, limit int) ([]*domain.WebhookDeadLetter, error)
 	ReplayDeadLetter(ctx context.Context, deadLetterID string) error
 	GetEndpointHealth(ctx context.Context, endpointID string) (*domain.WebhookHealth, error)
-	TriggerEvent(ctx context.Context, eventType string, payload interface{}) error
+	Dispatch(ctx context.Context, eventType string, payload interface{}) error
 	Deliver(ctx context.Context, deliveryID string) error
 }
 
@@ -185,7 +185,7 @@ func (s *service) ReplayDeadLetter(ctx context.Context, deadLetterID string) err
 	}
 
 	if s.queueClient != nil {
-		_, err = s.queueClient.EnqueueWebhookDeliveryy(ctx, newDel.ID)
+		_, err = s.queueClient.EnqueueWebhookDelivery(ctx, newDel.ID)
 		return err
 	}
 	return nil
@@ -206,7 +206,7 @@ func (s *service) GetEndpointHealth(ctx context.Context, endpointID string) (*do
 	}, nil
 }
 
-func (s *service) TriggerEvent(ctx context.Context, eventType string, payload interface{}) error {
+func (s *service) Dispatch(ctx context.Context, eventType string, payload interface{}) error {
 	bytesPayload, err := json.Marshal(payload)
 	if err != nil {
 		return err

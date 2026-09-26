@@ -324,7 +324,7 @@ func main() {
 		stellar.NewClaimableBalanceClient(cfg.StellarHorizonURL),
 		signer,
 		postgres.NewClaimableWalletResolver(walletRepo),
-		webhook.NewDispatcher(webhookRepo),
+		webhookSvc,
 		cfg.ClaimableBalanceSourceWalletID,
 		map[string]string{
 			"USDC": cfg.StellarUSDCIssuer,

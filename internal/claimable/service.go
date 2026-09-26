@@ -47,7 +47,7 @@ type WalletResolver interface {
 // Declared here so the claimable package stays independent of the webhook
 // package; webhook.Dispatcher satisfies it.
 type WebhookDispatcher interface {
-	Dispatch(ctx context.Context, tenantID *string, eventType string, payload interface{}) error
+	Dispatch(ctx context.Context, eventType string, payload interface{}) error
 }
 
 // CreateInput describes a new claimable balance.
@@ -582,7 +582,7 @@ func (s *service) dispatch(ctx context.Context, eventType string, payload interf
 	if s.webhooks == nil {
 		return
 	}
-	if err := s.webhooks.Dispatch(ctx, tenantPtr(ctx), eventType, payload); err != nil {
+	if err := s.webhooks.Dispatch(ctx, eventType, payload); err != nil {
 		log.Error().Err(err).Str("event_type", eventType).Msg("claimable: webhook dispatch failed")
 	}
 }
