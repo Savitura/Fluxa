@@ -24,6 +24,8 @@ var (
 	ErrBatchTooLarge                = errors.New("batch cannot contain more than 100 transfers")
 	ErrBatchEmpty                   = errors.New("batch must contain at least one transfer")
 	ErrScheduleNotFound             = errors.New("schedule not found")
+	ErrScheduleRunNotFound          = errors.New("schedule run not found")
+	ErrIncidentNotFound             = errors.New("incident not found")
 	ErrUserNotFound                 = errors.New("user not found")
 	ErrUserAlreadyExists            = errors.New("user with this email already exists")
 	ErrInvalidCredentials           = errors.New("invalid email or password")

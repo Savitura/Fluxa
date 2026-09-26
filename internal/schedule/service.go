@@ -38,6 +38,9 @@ type Service interface {
 	List(ctx context.Context) ([]*domain.Schedule, error)
 	Update(ctx context.Context, id string, in UpdateInput) (*domain.Schedule, error)
 	Cancel(ctx context.Context, id string) error
+	// ListRuns returns the paginated execution history for a schedule,
+	// verifying tenant ownership before querying run records.
+	ListRuns(ctx context.Context, scheduleID string, limit, offset int) ([]*domain.ScheduleRun, error)
 }
 
 type service struct {
@@ -150,4 +153,17 @@ func (s *service) Cancel(ctx context.Context, id string) error {
 	sch.Status = domain.ScheduleStatusCancelled
 	sch.UpdatedAt = time.Now().UTC()
 	return s.repo.Update(ctx, sch)
+}
+
+// ListRuns returns the paginated run history for the schedule identified by
+// scheduleID.  Tenant ownership is verified first: GetByID is always
+// tenant-scoped, so an unauthorised caller receives ErrScheduleNotFound
+// rather than a 403 that would reveal the existence of another tenant's
+// schedule.
+func (s *service) ListRuns(ctx context.Context, scheduleID string, limit, offset int) ([]*domain.ScheduleRun, error) {
+	// Verify ownership — GetByID uses the tenant context automatically.
+	if _, err := s.repo.GetByID(ctx, scheduleID); err != nil {
+		return nil, err
+	}
+	return s.repo.ListRuns(ctx, scheduleID, limit, offset)
 }

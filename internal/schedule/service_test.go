@@ -57,6 +57,31 @@ func (f *fakeScheduleRepo) Claim(ctx context.Context, id string, expectedNextRun
 	return true, nil
 }
 
+// ClaimRun, UpdateRun, GetRun, ListRuns are no-ops in the service-level fake
+// because service_test.go only tests schedule CRUD, not run execution.
+func (f *fakeScheduleRepo) ClaimRun(_ context.Context, scheduleID string, tenantID *string, expectedAt time.Time) (*domain.ScheduleRun, error) {
+	run := &domain.ScheduleRun{
+		ID:            "run-1",
+		ScheduleID:    scheduleID,
+		TenantID:      tenantID,
+		ExpectedRunAt: expectedAt,
+		Status:        domain.ScheduleRunStatusPending,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	}
+	return run, nil
+}
+
+func (f *fakeScheduleRepo) UpdateRun(_ context.Context, _ *domain.ScheduleRun) error { return nil }
+
+func (f *fakeScheduleRepo) GetRun(_ context.Context, scheduleID string, expectedAt time.Time) (*domain.ScheduleRun, error) {
+	return nil, domain.ErrScheduleRunNotFound
+}
+
+func (f *fakeScheduleRepo) ListRuns(_ context.Context, _ string, _, _ int) ([]*domain.ScheduleRun, error) {
+	return nil, nil
+}
+
 type fakeWalletRepo struct {
 	wallets map[string]*domain.Wallet
 }

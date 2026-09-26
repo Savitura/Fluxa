@@ -3,6 +3,7 @@ package schedule
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/fluxa/fluxa/internal/api"
@@ -26,6 +27,7 @@ func (h *Handler) Routes() func(r chi.Router) {
 		r.Get("/", h.list)
 		r.Patch("/{id}", h.update)
 		r.Delete("/{id}", h.cancel)
+		r.Get("/{id}/runs", h.listRuns)
 	}
 }
 
@@ -224,4 +226,66 @@ func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// scheduleRunResponse is the JSON representation of a single ScheduleRun.
+// Error details are included only when the run failed: they carry a
+// user-safe message and never expose internal stack traces or secrets.
+type scheduleRunResponse struct {
+	ID            string  `json:"id"`
+	ScheduleID    string  `json:"schedule_id"`
+	ExpectedRunAt string  `json:"expected_run_at"`
+	Status        string  `json:"status"`
+	TransactionID *string `json:"transaction_id,omitempty"`
+	Error         *string `json:"error,omitempty"`
+	StartedAt     *string `json:"started_at,omitempty"`
+	CompletedAt   *string `json:"completed_at,omitempty"`
+	CreatedAt     string  `json:"created_at"`
+}
+
+func toScheduleRunResponse(r *domain.ScheduleRun) scheduleRunResponse {
+	resp := scheduleRunResponse{
+		ID:            r.ID,
+		ScheduleID:    r.ScheduleID,
+		ExpectedRunAt: r.ExpectedRunAt.Format(time.RFC3339),
+		Status:        string(r.Status),
+		TransactionID: r.TransactionID,
+		CreatedAt:     r.CreatedAt.Format(time.RFC3339),
+	}
+	// Only surface the error field on failed runs to avoid leaking
+	// internal messaging to callers who don't need it.
+	if r.Status == domain.ScheduleRunStatusFailed && r.Error != nil {
+		resp.Error = r.Error
+	}
+	if r.StartedAt != nil {
+		s := r.StartedAt.Format(time.RFC3339)
+		resp.StartedAt = &s
+	}
+	if r.CompletedAt != nil {
+		c := r.CompletedAt.Format(time.RFC3339)
+		resp.CompletedAt = &c
+	}
+	return resp
+}
+
+// listRuns handles GET /v1/schedules/{id}/runs.
+// The schedule ID in the URL is verified against the caller's tenant before
+// any run records are fetched; an ID belonging to another tenant returns 404.
+func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+
+	runs, err := h.svc.ListRuns(r.Context(), id, limit, offset)
+	if err != nil {
+		api.HandleDomainError(w, err)
+		return
+	}
+
+	responses := make([]scheduleRunResponse, len(runs))
+	for i, run := range runs {
+		responses[i] = toScheduleRunResponse(run)
+	}
+	api.JSON(w, http.StatusOK, map[string]interface{}{"runs": responses})
 }

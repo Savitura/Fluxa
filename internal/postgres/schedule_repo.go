@@ -8,6 +8,7 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/tenant"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 )
@@ -151,4 +152,128 @@ func (r *ScheduleRepo) Claim(ctx context.Context, id string, expectedNextRunAt t
 	}
 
 	return tag.RowsAffected() > 0, nil
+}
+
+// ---------------------------------------------------------------------------
+// Schedule Run repository methods
+// ---------------------------------------------------------------------------
+
+const scheduleRunColumns = `id, schedule_id, tenant_id, expected_run_at, status, transaction_id, error, started_at, completed_at, created_at, updated_at`
+
+// ClaimRun atomically inserts a pending run record for the (scheduleID,
+// expectedAt) occurrence, or returns the existing record if one already
+// exists.  The UNIQUE(schedule_id, expected_run_at) constraint enforces that
+// only one worker can create a run for any given occurrence; concurrent
+// workers that lose the race receive the already-inserted record and must
+// check its status before proceeding.
+func (r *ScheduleRepo) ClaimRun(ctx context.Context, scheduleID string, tenantID *string, expectedAt time.Time) (*domain.ScheduleRun, error) {
+	id := uuid.New().String()
+	now := time.Now().UTC()
+
+	// Use INSERT ... ON CONFLICT DO NOTHING, then SELECT to get the winner.
+	// This is a single round-trip that avoids a separate SELECT-then-INSERT
+	// race while still being compatible with pgx/v5.
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO schedule_runs
+			(id, schedule_id, tenant_id, expected_run_at, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'pending', $5, $5)
+		ON CONFLICT (schedule_id, expected_run_at) DO NOTHING`,
+		id, scheduleID, nullableUUID(tenantID), expectedAt.UTC().Truncate(time.Second), now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("claim schedule run: %w", err)
+	}
+
+	// Fetch whichever row won (ours or an earlier one).
+	return r.GetRun(ctx, scheduleID, expectedAt)
+}
+
+// UpdateRun persists mutable run fields.
+func (r *ScheduleRepo) UpdateRun(ctx context.Context, run *domain.ScheduleRun) error {
+	run.UpdatedAt = time.Now().UTC()
+	_, err := r.db.Exec(ctx, `
+		UPDATE schedule_runs
+		SET status         = $2,
+		    transaction_id = $3,
+		    error          = $4,
+		    started_at     = $5,
+		    completed_at   = $6,
+		    updated_at     = $7
+		WHERE id = $1`,
+		run.ID,
+		run.Status,
+		nullableUUID(run.TransactionID),
+		nullableStringPtr(run.Error),
+		nullableTime(run.StartedAt),
+		nullableTime(run.CompletedAt),
+		run.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("update schedule run: %w", err)
+	}
+	return nil
+}
+
+// GetRun returns the run record for a given (scheduleID, expectedAt) pair.
+func (r *ScheduleRepo) GetRun(ctx context.Context, scheduleID string, expectedAt time.Time) (*domain.ScheduleRun, error) {
+	run, err := scanScheduleRun(r.db.QueryRow(ctx,
+		`SELECT `+scheduleRunColumns+` FROM schedule_runs WHERE schedule_id = $1 AND expected_run_at = $2`,
+		scheduleID, expectedAt.UTC().Truncate(time.Second),
+	))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrScheduleRunNotFound
+		}
+		return nil, fmt.Errorf("get schedule run: %w", err)
+	}
+	return run, nil
+}
+
+// ListRuns returns the run history for a schedule, tenant-scoped when a
+// tenant ID is present on the context.  Results are ordered by
+// expected_run_at DESC.  limit is enforced to at most 100 rows.
+func (r *ScheduleRepo) ListRuns(ctx context.Context, scheduleID string, limit, offset int) ([]*domain.ScheduleRun, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	tID := tenant.IDFromContext(ctx)
+	var args []interface{}
+	query := `SELECT ` + scheduleRunColumns + ` FROM schedule_runs WHERE schedule_id = $1`
+	args = append(args, scheduleID)
+
+	if tID != "" {
+		args = append(args, tID)
+		query += fmt.Sprintf(` AND tenant_id = $%d`, len(args))
+	}
+	args = append(args, limit, offset)
+	query += fmt.Sprintf(` ORDER BY expected_run_at DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args))
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list schedule runs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*domain.ScheduleRun
+	for rows.Next() {
+		run, err := scanScheduleRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
+	}
+	return out, rows.Err()
+}
+
+func scanScheduleRun(row rowScanner) (*domain.ScheduleRun, error) {
+	r := &domain.ScheduleRun{}
+	if err := row.Scan(
+		&r.ID, &r.ScheduleID, &r.TenantID, &r.ExpectedRunAt, &r.Status,
+		&r.TransactionID, &r.Error, &r.StartedAt, &r.CompletedAt,
+		&r.CreatedAt, &r.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
