@@ -140,7 +140,7 @@ func main() {
 		WithIssuers(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer)
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient, tenantRepo).
 		WithStellarClient(stellarClient)
-	webhookSvc := webhook.NewService(webhookRepo, redisClient, queueClient, 120)
+	webhookSvc := webhook.NewService(webhookRepo, redisClient, queueClient, 120, cfg.WebhookAllowPrivateNetworks)
 
 	// Compliance screening sits in front of settlement, so it is wired before
 	// the services that initiate transfers. When disabled, no screener is
@@ -310,7 +310,7 @@ func main() {
 	anchorHandler := anchor.NewHandler(anchorRegistry)
 	feeHandler := fees.NewHandler(feeSvc)
 	apikeyHandler := apikey.NewHandler(apiKeyRepo)
-	webhookHandler := webhook.NewHandler(webhookRepo)
+	webhookHandler := webhook.NewHandler(webhookSvc)
 	assetRegistry := assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer)
 	batchHandler := batch.NewHandler(batchSvc).WithIdempotency(idemMW).WithAssetValidator(assetRegistry.IsSupported)
 	scheduleHandler := schedule.NewHandler(scheduleSvc)
