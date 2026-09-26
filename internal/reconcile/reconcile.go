@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/fluxa/fluxa/internal/alerting"
@@ -11,6 +13,7 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/queue"
 	"github.com/fluxa/fluxa/internal/stellar"
+	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -76,6 +79,19 @@ type BalanceDiscrepancy struct {
 	ResolvedAt     *time.Time
 }
 
+type DriftSnapshot struct {
+	ID              string          `json:"id"`
+	TenantID        string          `json:"tenant_id"`
+	WalletID        string          `json:"wallet_id"`
+	WalletAddress   string          `json:"wallet_address"`
+	Asset           string          `json:"asset"`
+	ExpectedBalance decimal.Decimal `json:"expected_balance"`
+	ActualBalance   decimal.Decimal `json:"actual_balance"`
+	DriftAmount     decimal.Decimal `json:"drift_amount"`
+	Threshold       decimal.Decimal `json:"threshold"`
+	DetectedAt      time.Time       `json:"detected_at"`
+}
+
 // Repository is implemented by postgres.TransactionRepo and covers confirmed-tx
 // auditing, pending-tx reconciliation, and run record writes.
 type Repository interface {
@@ -106,6 +122,11 @@ type WalletRepository interface {
 	ListAllWallets(ctx context.Context) ([]*domain.Wallet, error)
 	GetDBBalances(ctx context.Context, walletID string) (map[string]decimal.Decimal, error)
 	WriteBalanceDiscrepancy(ctx context.Context, d *BalanceDiscrepancy) error
+}
+
+type DriftRepository interface {
+	WriteDriftSnapshot(ctx context.Context, snapshot *DriftSnapshot) error
+	ListCurrentDrift(ctx context.Context) ([]*DriftSnapshot, error)
 }
 
 // WalletLookup resolves a wallet ID to its Stellar public key. Implemented by
@@ -144,7 +165,7 @@ func NewService(
 	assetRegistry *assets.Registry,
 	platformFeeWallet string,
 ) *Service {
-	return &Service{
+	service := &Service{
 		repo:              repo,
 		walletRepo:        walletRepo,
 		walletLookup:      walletLookup,
@@ -154,9 +175,52 @@ func NewService(
 		webhookSvc:        webhookSvc,
 		svcName:           svcName,
 		balanceThreshold:  balanceThreshold,
+		driftThreshold:    balanceThreshold,
 		assetRegistry:     assetRegistry,
 		platformFeeWallet: platformFeeWallet,
+		currentDrift:      make(map[string]DriftSnapshot),
 	}
+	if driftRepo, ok := walletRepo.(DriftRepository); ok {
+		service.driftRepo = driftRepo
+	}
+	return service
+}
+
+// WithDriftThreshold sets the alerting threshold used to decide whether a
+// DB-vs-on-chain balance difference is worth alerting on. It is separate from
+// balanceThreshold because the two answer different questions: the discrepancy
+// threshold decides what gets written to the discrepancy table for manual
+// review, while the drift threshold decides what pages an operator.
+func (s *Service) WithDriftThreshold(threshold decimal.Decimal) *Service {
+	s.driftThreshold = threshold
+	return s
+}
+
+// DefaultDriftThresholdUSD is used when RECONCILIATION_DRIFT_THRESHOLD_USD is
+// unset or unparseable.
+var DefaultDriftThresholdUSD = decimal.RequireFromString("1.00")
+
+// ParseDriftThreshold reads the RECONCILIATION_DRIFT_THRESHOLD_USD env value.
+// An empty or malformed value falls back to DefaultDriftThresholdUSD and logs
+// a warning, so a typo degrades to a sane default rather than crashing the
+// worker on boot or silently disabling alerting.
+func ParseDriftThreshold(raw string) decimal.Decimal {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return DefaultDriftThresholdUSD
+	}
+	threshold, err := decimal.NewFromString(trimmed)
+	if err != nil {
+		log.Warn().Err(err).Str("value", raw).
+			Msg("reconcile: invalid RECONCILIATION_DRIFT_THRESHOLD_USD, using default")
+		return DefaultDriftThresholdUSD
+	}
+	if threshold.IsNegative() {
+		log.Warn().Str("value", raw).
+			Msg("reconcile: negative RECONCILIATION_DRIFT_THRESHOLD_USD, using default")
+		return DefaultDriftThresholdUSD
+	}
+	return threshold
 }
 
 // RunAll is called by the Asynq periodic task every 5 minutes. It runs the
@@ -230,7 +294,7 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 		// enough, RecoverPending will re-enqueue it; nothing to do here.
 		if time.Since(tx.CreatedAt) > stuckThreshold {
 			log.Warn().Str("tx_id", tx.ID).
-				Msg("reconcile: pending tx has no hash and exceeds stuck threshold — flagging for manual review")
+				Msg("reconcile: pending tx has no hash and exceeds stuck threshold ΓÇö flagging for manual review")
 			s.alerting.Warning(ctx, "Unsubmitted Transaction Detected",
 				fmt.Sprintf("Transaction %s has been pending with no Stellar hash for %s. RecoverPending will re-enqueue.", tx.ID, time.Since(tx.CreatedAt).Round(time.Second)))
 			return true, false, nil
@@ -238,14 +302,14 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 		return false, false, nil
 	}
 
-	horizonTx, fetchErr := s.stellar.TransactionDetail(tx.TxHash)
+	horizonTx, fetchErr := stellar.TransactionDetailWithContext(ctx, s.stellar, tx.TxHash)
 	if fetchErr != nil {
 		hErr, ok := fetchErr.(*horizonclient.Error)
 		if ok && hErr.Problem.Status == 404 {
 			// Hash exists in DB but Horizon doesn't know about it.
 			if time.Since(tx.CreatedAt) > stuckThreshold {
 				log.Warn().Str("tx_id", tx.ID).Str("tx_hash", tx.TxHash).
-					Msg("reconcile: pending tx not found on Horizon after threshold — flagging for manual review")
+					Msg("reconcile: pending tx not found on Horizon after threshold ΓÇö flagging for manual review")
 				s.alerting.Warning(ctx, "Transaction Not Found on Horizon",
 					fmt.Sprintf("Transaction %s (hash: %s) is pending in DB but not found on Horizon after %s. RecoverPending will re-enqueue.", tx.ID, tx.TxHash, time.Since(tx.CreatedAt).Round(time.Second)))
 				return true, false, nil
@@ -256,7 +320,7 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 	}
 
 	if horizonTx.Successful {
-		// On-chain confirmed but DB still shows pending → correct to confirmed.
+		// On-chain confirmed but DB still shows pending ΓåÆ correct to confirmed.
 		if updateErr := s.repo.UpdateTxConfirmed(ctx, tx.ID, tx.TxHash); updateErr != nil {
 			if errors.Is(updateErr, domain.ErrConcurrentUpdate) {
 				log.Warn().Str("tx_id", tx.ID).
@@ -266,12 +330,12 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 			return true, false, fmt.Errorf("update tx %s to confirmed: %w", tx.ID, updateErr)
 		}
 		log.Info().Str("tx_id", tx.ID).Str("tx_hash", tx.TxHash).
-			Msg("reconcile: corrected DB state pending→confirmed")
+			Msg("reconcile: corrected DB state pendingΓåÆconfirmed")
 		s.dispatchWebhook(ctx, domain.EventTransferSettled, tx)
 		return true, true, nil
 	}
 
-	// On-chain failed but DB still shows pending → correct to failed.
+	// On-chain failed but DB still shows pending ΓåÆ correct to failed.
 	if updateErr := s.repo.UpdateTxFailed(ctx, tx.ID); updateErr != nil {
 		if errors.Is(updateErr, domain.ErrConcurrentUpdate) {
 			log.Warn().Str("tx_id", tx.ID).
@@ -281,7 +345,7 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 		return true, false, fmt.Errorf("update tx %s to failed: %w", tx.ID, updateErr)
 	}
 	log.Info().Str("tx_id", tx.ID).Str("tx_hash", tx.TxHash).
-		Str("result_xdr", horizonTx.ResultXdr).Msg("reconcile: corrected DB state pending→failed")
+		Str("result_xdr", horizonTx.ResultXdr).Msg("reconcile: corrected DB state pendingΓåÆfailed")
 	s.dispatchWebhook(ctx, domain.EventTransferFailed, tx)
 	return true, true, nil
 }
@@ -352,7 +416,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) error {
 	hash := tx.TxHash
 
-	horizonTx, err := s.stellar.TransactionDetail(hash)
+	horizonTx, err := stellar.TransactionDetailWithContext(ctx, s.stellar, hash)
 	if err != nil {
 		hErr, ok := err.(*horizonclient.Error)
 		if ok && hErr.Problem.Status == 404 {
@@ -382,7 +446,7 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 		return nil
 	}
 
-	ops, err := s.stellar.OperationsForTransaction(hash)
+	ops, err := stellar.OperationsForTransactionWithContext(ctx, s.stellar, hash)
 	if err != nil {
 		return fmt.Errorf("fetch operations for transaction: %w", err)
 	}
@@ -422,7 +486,7 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 // transaction's on-chain operations to contain: the precise source and
 // destination accounts (not just "some account"), the asset's code AND
 // issuer/native identity (not just a matching code, which a look-alike asset
-// could also have), and the exact net amount — plus, when the transaction
+// could also have), and the exact net amount ΓÇö plus, when the transaction
 // carries a platform fee, the exact fee leg paid to the platform fee wallet.
 type expectedPayment struct {
 	// FromPublicKey is "" when the transaction has no internal source wallet
@@ -491,7 +555,7 @@ type candidatePayment struct {
 // assetIdentityMatches reports whether the candidate's asset is the exact
 // asset the platform expects: native XLM must match on type alone (native
 // assets carry no code/issuer), while a credit asset must match on code AND
-// issuer — a look-alike token sharing a code (e.g. an unofficial "USDC")
+// issuer ΓÇö a look-alike token sharing a code (e.g. an unofficial "USDC")
 // with a different issuer must not be accepted.
 func (c candidatePayment) assetIdentityMatches(expected expectedPayment) bool {
 	if expected.AssetCode == "XLM" {
@@ -504,7 +568,7 @@ func (c candidatePayment) assetIdentityMatches(expected expectedPayment) bool {
 // every expected property of the transaction's primary payment leg at once:
 // exact source (when one is expected), exact destination, exact asset
 // identity, and the exact net amount. Matching amount and asset independently
-// on different operations — the root cause of #97 — is deliberately not
+// on different operations ΓÇö the root cause of #97 ΓÇö is deliberately not
 // possible here since every check runs against the same candidate.
 func (c candidatePayment) matchesMainLeg(expected expectedPayment) bool {
 	if expected.FromPublicKey != "" && c.From != expected.FromPublicKey {
@@ -575,7 +639,7 @@ func extractCandidatePayment(op operations.Operation) (candidate candidatePaymen
 // verifyOps checks the transaction's Horizon operations against exactly what
 // the platform expects. amountVerified/assetVerified are only ever set
 // together, by a single candidate operation that matches source,
-// destination, asset identity, and amount simultaneously — an unrelated
+// destination, asset identity, and amount simultaneously ΓÇö an unrelated
 // operation that merely happens to share the amount or the asset code is
 // rejected. When the transaction carries a platform fee, feeVerified
 // additionally requires a distinct operation paying that exact fee to the
@@ -677,32 +741,34 @@ func (s *Service) RecoverPending(ctx context.Context) error {
 
 // RunBalanceReconciliation is a daily job that compares each wallet's DB balances
 // against live Horizon account balances. Discrepancies are flagged in the
-// balance_discrepancies table and alerted — never auto-corrected.
+// balance_discrepancies table and alerted ΓÇö never auto-corrected.
 func (s *Service) RunBalanceReconciliation(ctx context.Context) error {
 	wallets, err := s.walletRepo.ListAllWallets(ctx)
 	if err != nil {
 		return fmt.Errorf("list wallets for balance reconciliation: %w", err)
 	}
 
-	log.Info().Int("wallet_count", len(wallets)).Msg("reconcile: balance reconciliation starting")
+	// Log through the context so every entry carries the inherited trace_id.
+	logger := tracing.Logger(ctx)
+
+	logger.Info().Int("wallet_count", len(wallets)).Msg("reconcile: balance reconciliation starting")
 
 	for _, w := range wallets {
 		if err := s.checkWalletBalance(ctx, w); err != nil {
-			log.Error().Err(err).Str("wallet_id", w.ID).Str("public_key", w.PublicKey).
+			logger.Error().Err(err).Str("wallet_id", w.ID).Str("public_key", w.PublicKey).
 				Msg("reconcile: wallet balance check failed")
 		}
 	}
 
-	log.Info().Msg("reconcile: balance reconciliation complete")
+	logger.Info().Msg("reconcile: balance reconciliation complete")
 	return nil
 }
 
 func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) error {
-	acct, err := s.stellar.LoadAccount(w.PublicKey)
+	acct, err := stellar.LoadAccountWithContext(ctx, s.stellar, w.PublicKey)
 	if err != nil {
 		hErr, ok := err.(*horizonclient.Error)
 		if ok && hErr.Problem.Status == 404 {
-			// Wallet not yet funded on Stellar — not a discrepancy.
 			return nil
 		}
 		return fmt.Errorf("load Horizon account %s: %w", w.PublicKey, err)
@@ -722,15 +788,19 @@ func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) erro
 		horizonBalances[asset] = horizonBalances[asset].Add(amt)
 	}
 
-	// Union of all assets mentioned in either side.
-	assets := make(map[string]struct{})
-	for k := range dbBalances {
-		assets[k] = struct{}{}
+	assets := make(map[string]struct{}, len(dbBalances)+len(horizonBalances))
+	for asset := range dbBalances {
+		assets[asset] = struct{}{}
 	}
-	for k := range horizonBalances {
-		assets[k] = struct{}{}
+	for asset := range horizonBalances {
+		assets[asset] = struct{}{}
 	}
 
+	threshold := s.driftThreshold
+	if threshold.IsNegative() {
+		threshold = decimal.Zero
+	}
+	logger := tracing.Logger(ctx)
 	for asset := range assets {
 		dbAmt := dbBalances[asset] // zero-value decimal if key absent
 		horizonAmt := horizonBalances[asset]
@@ -739,26 +809,52 @@ func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) erro
 			continue
 		}
 
-		d := &BalanceDiscrepancy{
+		discrepancy := &BalanceDiscrepancy{
 			ID:             uuid.New().String(),
 			WalletID:       w.ID,
-			DBBalance:      dbAmt,
-			HorizonBalance: horizonAmt,
+			DBBalance:      expected,
+			HorizonBalance: actual,
 			Asset:          asset,
-			DetectedAt:     time.Now().UTC(),
+			DetectedAt:     now,
 		}
-		if writeErr := s.walletRepo.WriteBalanceDiscrepancy(ctx, d); writeErr != nil {
-			log.Error().Err(writeErr).Str("wallet_id", w.ID).Str("asset", asset).
+		if writeErr := s.walletRepo.WriteBalanceDiscrepancy(ctx, discrepancy); writeErr != nil {
+			logger.Error().Err(writeErr).Str("wallet_id", w.ID).Str("asset", asset).
 				Msg("reconcile: write balance discrepancy")
 		}
 
-		log.Warn().Str("wallet_id", w.ID).Str("public_key", w.PublicKey).Str("asset", asset).
-			Str("db_balance", dbAmt.String()).Str("horizon_balance", horizonAmt.String()).
-			Str("diff", diff.String()).Msg("reconcile: balance discrepancy detected")
-
-		s.alerting.Warning(ctx, "Balance Discrepancy Detected",
-			fmt.Sprintf("Wallet %s (key: %s): asset=%s DB=%s Horizon=%s diff=%s",
-				w.ID, w.PublicKey, asset, dbAmt.String(), horizonAmt.String(), diff.String()))
+		logger.Warn().Str("tenant_id", tenantID).Str("wallet_id", w.ID).Str("wallet_address", w.PublicKey).
+			Str("asset", asset).Str("expected_balance", expected.String()).Str("actual_balance", actual.String()).
+			Str("drift_amount", drift.String()).Msg("reconcile: balance drift detected")
+		if s.alerting != nil {
+			s.alerting.SendDrift(ctx, alerting.DriftAlert{
+				TenantID:        tenantID,
+				WalletAddress:   w.PublicKey,
+				ExpectedBalance: expected.String(),
+				ActualBalance:   actual.String(),
+				DriftAmount:     drift.String(),
+				Asset:           asset,
+				WalletID:        w.ID,
+				DetectedAt:      now.Format(time.RFC3339),
+			})
+		}
+		// Also surface the drift as a webhook event so tenants subscribed to
+		// reconciliation.drift are notified, not just platform operators.
+		if s.webhookSvc != nil {
+			if dispatchErr := s.webhookSvc.Dispatch(ctx, domain.EventReconciliationDrift, map[string]interface{}{
+				"tenant_id":        tenantID,
+				"wallet_id":        w.ID,
+				"wallet_address":   w.PublicKey,
+				"asset":            asset,
+				"expected_balance": expected.String(),
+				"actual_balance":   actual.String(),
+				"drift_amount":     drift.String(),
+				"threshold":        threshold.String(),
+				"detected_at":      now.Format(time.RFC3339),
+			}); dispatchErr != nil {
+				logger.Error().Err(dispatchErr).Str("wallet_id", w.ID).Str("asset", asset).
+					Msg("reconcile: dispatch reconciliation.drift event")
+			}
+		}
 	}
 
 	return nil

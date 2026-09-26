@@ -15,6 +15,8 @@ var (
 	ErrReconciliationFailed         = errors.New("reconciliation check failed")
 	ErrWebhookNotFound              = errors.New("webhook endpoint not found")
 	ErrWebhookDeliveryNotFound      = errors.New("webhook delivery not found")
+	ErrWebhookConfigNotFound        = errors.New("webhook config not found")
+	ErrWebhookConfigDisabled        = errors.New("webhook delivery is disabled")
 	ErrQuoteExpired                 = errors.New("quote expired")
 	ErrQuoteAlreadyUsed             = errors.New("quote already used")
 	ErrQuoteOwnershipMismatch       = errors.New("quote does not belong to this tenant")

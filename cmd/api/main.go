@@ -33,6 +33,7 @@ import (
 	"github.com/fluxa/fluxa/internal/server/idempotency"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
+	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/treasury"
 	"github.com/fluxa/fluxa/internal/wallet"
@@ -61,6 +62,20 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	tracingShutdown, err := tracing.Init(ctx, tracing.Config{
+		Enabled:          cfg.OTELEnabled,
+		ExporterEndpoint: cfg.OTELExporterEndpoint,
+		ServiceName:      cfg.OTELServiceName,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("initialize tracing")
+	}
+	defer func() {
+		if err := tracing.ShutdownWithTimeout(tracingShutdown, 5*time.Second); err != nil {
+			log.Error().Err(err).Msg("tracing shutdown")
+		}
+	}()
 
 	if err := postgres.RunMigrations(cfg.DatabaseURL, cfg.MigrationsPath); err != nil {
 		log.Fatal().Err(err).Msg("run migrations")
@@ -272,7 +287,7 @@ func main() {
 		decimal.Zero,
 		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 		cfg.PlatformFeeWalletPublicKey,
-	)
+	).WithDriftThreshold(reconcile.ParseDriftThreshold(cfg.ReconciliationDriftThresholdUSD))
 	reconcileHandler := reconcile.NewHandler(reconcileSvc)
 
 	authHandler := auth.NewHandler(authSvc)

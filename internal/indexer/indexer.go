@@ -63,7 +63,7 @@ func (idx *Indexer) SyncAll(ctx context.Context, limit, offset int) error {
 // so a subsequent call resumes rather than reprocessing history.
 // TenantID is set from the indexed wallet on every created transaction.
 func (idx *Indexer) SyncWallet(ctx context.Context, w *domain.Wallet) error {
-	acct, err := idx.stellar.LoadAccount(w.PublicKey)
+	acct, err := stellar.LoadAccountWithContext(ctx, idx.stellar, w.PublicKey)
 	if err != nil {
 		if isNotFound(err) {
 			return nil // account not yet funded — nothing to sync
@@ -77,7 +77,7 @@ func (idx *Indexer) SyncWallet(ctx context.Context, w *domain.Wallet) error {
 
 	cursor := w.SyncCursor
 	for {
-		ops, err := idx.stellar.Payments(w.PublicKey, cursor, paymentsPageLimit)
+		ops, err := stellar.PaymentsWithContext(ctx, idx.stellar, w.PublicKey, cursor, paymentsPageLimit)
 		if err != nil {
 			return fmt.Errorf("fetch payments since cursor %q: %w", cursor, err)
 		}
@@ -160,7 +160,7 @@ func (idx *Indexer) StreamWallet(ctx context.Context, w *domain.Wallet) {
 		default:
 		}
 
-		err := idx.stellar.StreamPayments(ctx, w.PublicKey, cursor, func(op operations.Operation) error {
+		err := stellar.StreamPaymentsWithContext(ctx, idx.stellar, w.PublicKey, cursor, func(op operations.Operation) error {
 			if procErr := idx.processPayment(ctx, w, op); procErr != nil {
 				log.Error().Err(procErr).Str("wallet_id", w.ID).Str("op_id", op.GetID()).
 					Msg("indexer: process streamed payment failed")

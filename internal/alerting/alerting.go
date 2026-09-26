@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/rs/zerolog/log"
 )
 
@@ -20,11 +21,22 @@ const (
 )
 
 type Alert struct {
-	Level     Level   `json:"level"`
-	Title     string  `json:"title"`
-	Message   string  `json:"message"`
-	Service   string  `json:"service"`
-	Timestamp string  `json:"timestamp"`
+	Level     Level  `json:"level"`
+	Title     string `json:"title"`
+	Message   string `json:"message"`
+	Service   string `json:"service"`
+	Timestamp string `json:"timestamp"`
+}
+
+type DriftAlert struct {
+	TenantID        string `json:"tenant_id"`
+	WalletAddress   string `json:"wallet_address"`
+	ExpectedBalance string `json:"expected_balance"`
+	ActualBalance   string `json:"actual_balance"`
+	DriftAmount     string `json:"drift_amount"`
+	Asset           string `json:"asset"`
+	WalletID        string `json:"wallet_id"`
+	DetectedAt      string `json:"detected_at"`
 }
 
 type Client struct {
@@ -81,6 +93,53 @@ func (c *Client) Send(ctx context.Context, level Level, title, message string) {
 	}
 
 	log.Info().Str("level", string(level)).Str("title", title).Msg("alerting: alert sent")
+}
+
+func (c *Client) SendDrift(ctx context.Context, alert DriftAlert) {
+	if c.webhookURL == "" {
+		return
+	}
+	// Log through the context so alerts raised during a request or job carry
+	// the trace_id of whatever detected the drift.
+	logger := tracing.Logger(ctx)
+	body, err := json.Marshal(struct {
+		Level   Level      `json:"level"`
+		Title   string     `json:"title"`
+		Service string     `json:"service"`
+		Alert   DriftAlert `json:"alert"`
+	}{
+		Level:   LevelWarning,
+		Title:   "Reconciliation Drift Detected",
+		Service: c.service,
+		Alert:   alert,
+	})
+	if err != nil {
+		logger.Error().Err(err).Msg("alerting: marshal drift alert")
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.webhookURL, bytes.NewReader(body))
+	if err != nil {
+		logger.Error().Err(err).Msg("alerting: create drift request")
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		logger.Error().Err(err).Msg("alerting: send drift request")
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		logger.Error().Int("status", resp.StatusCode).Msg("alerting: drift webhook returned error")
+		return
+	}
+	logger.Warn().
+		Str("tenant_id", alert.TenantID).
+		Str("wallet_id", alert.WalletID).
+		Str("wallet_address", alert.WalletAddress).
+		Str("asset", alert.Asset).
+		Str("drift_amount", alert.DriftAmount).
+		Msg("alerting: reconciliation drift alert sent")
 }
 
 func (c *Client) Critical(ctx context.Context, title, message string) {

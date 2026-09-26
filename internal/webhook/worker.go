@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/hibiken/asynq"
 )
 
@@ -18,9 +19,20 @@ func NewWorker(svc Service) *Worker {
 }
 
 func (w *Worker) HandleDeliver(ctx context.Context, t *asynq.Task) error {
-	var p queue.WebhookDeliverPayload
-	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+	ctx = queue.ContextFromTask(ctx, t)
+	ctx, span := tracing.StartConsumer(ctx, t.Type())
+	defer span.End()
+
+	var payload queue.WebhookDeliverPayload
+	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
 		return fmt.Errorf("unmarshal webhook deliver payload: %w", err)
 	}
-	return w.svc.Deliver(ctx, p.DeliveryID)
+	if payload.Config {
+		configSvc, ok := w.svc.(ConfigService)
+		if !ok {
+			return fmt.Errorf("tenant webhook config service is unavailable")
+		}
+		return configSvc.DeliverConfig(ctx, payload.DeliveryID, payload.TenantID)
+	}
+	return w.svc.Deliver(ctx, payload.DeliveryID)
 }

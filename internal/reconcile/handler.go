@@ -43,6 +43,24 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
  api.JSON(w, http.StatusOK, summary)
 }
 
+func (h *Handler) drift(w http.ResponseWriter, r *http.Request) {
+	snapshots, err := h.svc.GetDrift(r.Context())
+	if err != nil {
+		api.InternalError(w, err)
+		return
+	}
+	// Always emit a JSON array, never null, so clients can iterate the result
+	// without a nil check when there is no drift.
+	if snapshots == nil {
+		snapshots = []*DriftSnapshot{}
+	}
+	api.JSON(w, http.StatusOK, map[string]interface{}{
+		"drift":   snapshots,
+		"count":   len(snapshots),
+		"checked": time.Now().UTC(),
+	})
+}
+
 func (h *Handler) run(w http.ResponseWriter, r *http.Request) {
  summary, err := h.svc.GetSummary(r.Context(), 7)
  if err != nil {

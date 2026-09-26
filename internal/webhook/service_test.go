@@ -67,6 +67,12 @@ func (f *fakeRepo) GetDelivery(_ context.Context, id string) (*domain.WebhookDel
 	if !ok {
 		return nil, http.ErrMissingBoundary
 	}
+	if tenantID != nil && d.EndpointID != "" {
+		ep := m.endpoints[d.EndpointID]
+		if ep == nil || ep.TenantID == nil || *ep.TenantID != *tenantID {
+			return nil, domain.ErrWebhookDeliveryNotFound
+		}
+	}
 	return d, nil
 }
 

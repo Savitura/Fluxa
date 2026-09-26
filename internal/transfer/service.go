@@ -246,7 +246,7 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 
 	if s.queue != nil {
 		if err := s.queue.EnqueueTransfer(ctx, tx.ID); err != nil {
-			// Transaction is persisted — worker will not run, but it can be retried.
+			// Transaction is persisted ΓÇö worker will not run, but it can be retried.
 			// Log this but don't fail the request.
 			_ = err
 		}
@@ -259,7 +259,7 @@ func (s *service) validateTrustline(ctx context.Context, walletID, publicKey, as
 	hasTrustline := false
 
 	if s.stellar != nil {
-		acct, err := s.stellar.LoadAccount(publicKey)
+		acct, err := stellar.LoadAccountWithContext(ctx, s.stellar, publicKey)
 		if err != nil {
 			hErr, ok := err.(*horizonclient.Error)
 			if ok && hErr.Response.Status == "404" {

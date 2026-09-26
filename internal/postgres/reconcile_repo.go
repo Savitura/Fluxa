@@ -83,3 +83,75 @@ func (r *ReconcileRepo) WriteBalanceDiscrepancy(ctx context.Context, d *reconcil
 	}
 	return nil
 }
+
+func (r *ReconcileRepo) WriteDriftSnapshot(ctx context.Context, snapshot *reconcile.DriftSnapshot) error {
+	var tenantID *string
+	if snapshot.TenantID != "" {
+		tenantID = &snapshot.TenantID
+	}
+	_, err := r.db.Exec(ctx,
+		`INSERT INTO reconciliation_drift_snapshots
+		 (id, tenant_id, wallet_id, wallet_address, asset, expected_balance, actual_balance, drift_amount, threshold, detected_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		snapshot.ID, tenantID, snapshot.WalletID, snapshot.WalletAddress, snapshot.Asset,
+		snapshot.ExpectedBalance.String(), snapshot.ActualBalance.String(), snapshot.DriftAmount.String(),
+		snapshot.Threshold.String(), snapshot.DetectedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("write reconciliation drift snapshot: %w", err)
+	}
+	return nil
+}
+
+func (r *ReconcileRepo) ListCurrentDrift(ctx context.Context) ([]*reconcile.DriftSnapshot, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT id, tenant_id, wallet_id, wallet_address, asset, expected_balance, actual_balance, drift_amount, threshold, detected_at
+		 FROM (
+		 SELECT id, tenant_id, wallet_id, wallet_address, asset, expected_balance, actual_balance, drift_amount, threshold, detected_at,
+		        ROW_NUMBER() OVER (PARTITION BY wallet_id, asset ORDER BY detected_at DESC, id DESC) AS row_number
+		 FROM reconciliation_drift_snapshots
+		 ) latest
+		 WHERE row_number = 1
+		 ORDER BY detected_at DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list current reconciliation drift: %w", err)
+	}
+	defer rows.Close()
+
+	var snapshots []*reconcile.DriftSnapshot
+	for rows.Next() {
+		snapshot := &reconcile.DriftSnapshot{}
+		var tenantID *string
+		var expected, actual, drift, threshold string
+		if err := rows.Scan(
+			&snapshot.ID, &tenantID, &snapshot.WalletID, &snapshot.WalletAddress, &snapshot.Asset,
+			&expected, &actual, &drift, &threshold, &snapshot.DetectedAt,
+		); err != nil {
+			return nil, err
+		}
+		if tenantID != nil {
+			snapshot.TenantID = *tenantID
+		}
+		snapshot.ExpectedBalance, err = decimal.NewFromString(expected)
+		if err != nil {
+			return nil, err
+		}
+		snapshot.ActualBalance, err = decimal.NewFromString(actual)
+		if err != nil {
+			return nil, err
+		}
+		snapshot.DriftAmount, err = decimal.NewFromString(drift)
+		if err != nil {
+			return nil, err
+		}
+		snapshot.Threshold, err = decimal.NewFromString(threshold)
+		if err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots, rows.Err()
+}
+
+var _ reconcile.DriftRepository = (*ReconcileRepo)(nil)
