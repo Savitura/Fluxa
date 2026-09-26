@@ -7,14 +7,13 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type TenantRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewTenantRepo(db *pgxpool.Pool) *TenantRepo {
+func NewTenantRepo(db DB) *TenantRepo {
 	return &TenantRepo{db: db}
 }
 
@@ -48,4 +47,3 @@ func (r *TenantRepo) GetByID(ctx context.Context, id string) (*domain.Tenant, er
 	}
 	return t, nil
 }
-

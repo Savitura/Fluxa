@@ -9,14 +9,13 @@ import (
 	"github.com/fluxa/fluxa/internal/server/idempotency"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type IdempotencyRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewIdempotencyRepo(db *pgxpool.Pool) *IdempotencyRepo {
+func NewIdempotencyRepo(db DB) *IdempotencyRepo {
 	return &IdempotencyRepo{db: db}
 }
 

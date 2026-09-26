@@ -1,4 +1,4 @@
-.PHONY: run-api run-worker migrate migrate-down test lint build tidy
+.PHONY: run-api run-worker migrate migrate-down test lint build tidy deploy-primary deploy-secondary failover
 
 # Run the API server
 run-api:
@@ -44,6 +44,31 @@ tidy:
 # Generate sqlc (if using sqlc for query generation)
 generate:
 	sqlc generate
+
+# Multi-region deployment helpers. Override COMPOSE, PRIMARY_ENV, SECONDARY_ENV,
+# PROMOTE_REPLICA_CMD, and UPDATE_DNS_CMD in the deployment environment.
+deploy-primary:
+	@echo "Deploying API and worker in the primary region"
+	$(COMPOSE) --env-file $(PRIMARY_ENV) up -d --build api worker
+
+deploy-secondary:
+	@echo "Deploying API-only secondary region"
+	$(COMPOSE) --env-file $(SECONDARY_ENV) up -d --build api
+
+failover:
+	@test -n "$(PROMOTE_REPLICA_CMD)" || (echo "PROMOTE_REPLICA_CMD is required"; exit 1)
+	@test -n "$(UPDATE_DNS_CMD)" || (echo "UPDATE_DNS_CMD is required"; exit 1)
+	@echo "Promoting the secondary database"
+	$(PROMOTE_REPLICA_CMD)
+	@echo "Starting the secondary worker"
+	WORKER_ENABLED=true $(COMPOSE) --env-file $(SECONDARY_ENV) up -d --build worker
+	@echo "Updating DNS"
+	$(UPDATE_DNS_CMD)
+	@echo "Verify /health, /health/ready, and /health/live before restoring traffic"
+
+COMPOSE ?= docker compose
+PRIMARY_ENV ?= .env.primary
+SECONDARY_ENV ?= .env.secondary
 
 # Docker helpers
 docker-build:

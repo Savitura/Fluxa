@@ -2,18 +2,28 @@ package batch
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/fluxa/fluxa/internal/api"
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
+// idempotencyKeyHeader mirrors the header name used by
+// internal/server/idempotency, duplicated here (rather than exported from
+// that package) because it is only needed to decide whether this handler
+// must supply a server-generated key before delegating to the shared
+// middleware.
+const idempotencyKeyHeader = "Idempotency-Key"
+
 type Handler struct {
-	svc  Service
-	idem func(http.Handler) http.Handler
+	svc              Service
+	idem             func(http.Handler) http.Handler
+	assetIsSupported func(code string) bool
 }
 
 func NewHandler(svc Service) *Handler {
@@ -21,9 +31,22 @@ func NewHandler(svc Service) *Handler {
 }
 
 // WithIdempotency attaches the idempotency-key middleware to the
-// state-mutating route (POST /) only.
+// state-mutating route (POST /) only. Unlike the single-transfer endpoints
+// (wallet, transfer, fx) that require the caller to supply the key, batch
+// submissions treat it as optional: ensureIdempotencyKey generates one
+// server-side when absent so the shared middleware always has a key to work
+// with, while a request with no key still succeeds normally instead of
+// being rejected.
 func (h *Handler) WithIdempotency(mw func(http.Handler) http.Handler) *Handler {
 	h.idem = mw
+	return h
+}
+
+// WithAssetValidator sets the function used to check whether an asset code
+// is supported. When set, the batch endpoint validates every item's asset
+// before creating the batch and returns per-row validation errors.
+func (h *Handler) WithAssetValidator(fn func(code string) bool) *Handler {
+	h.assetIsSupported = fn
 	return h
 }
 
@@ -32,12 +55,26 @@ func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		post := r.Post
 		if h.idem != nil {
-			post = r.With(h.idem).Post
+			post = r.With(ensureIdempotencyKey, h.idem).Post
 		}
 		post("/", h.createBatch)
 		r.Get("/{batchId}", h.getBatch)
 		r.Get("/{batchId}/export", h.exportBatch)
 	}
+}
+
+// ensureIdempotencyKey generates a server-side UUID v4 idempotency key for
+// batch requests that don't supply one, so the header stays optional for
+// this endpoint: a caller that skips it still gets normal, non-deduplicated
+// processing, while a caller that supplies a key still gets the duplicate
+// detection implemented by the shared idempotency middleware.
+func ensureIdempotencyKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(idempotencyKeyHeader) == "" {
+			r.Header.Set(idempotencyKeyHeader, uuid.New().String())
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type batchItemRequest struct {
@@ -62,14 +99,24 @@ type batchTransferResponse struct {
 	TxHash    string `json:"tx_hash,omitempty"`
 }
 
+// ValidationError describes a single invalid row in the batch request.
+type ValidationError struct {
+	Row    int    `json:"row"`
+	Field  string `json:"field"`
+	Value  string `json:"value"`
+	Reason string `json:"reason"`
+}
+
 type batchResponse struct {
-	ID           string                  `json:"id"`
-	Status       string                  `json:"status"`
-	TotalCount   int                     `json:"total_count"`
-	SuccessCount int                     `json:"success_count"`
-	FailedCount  int                     `json:"failed_count"`
-	CreatedAt    string                  `json:"created_at"`
-	Transfers    []batchTransferResponse `json:"transfers,omitempty"`
+	ID               string                  `json:"id"`
+	Status           string                  `json:"status"`
+	TotalCount       int                     `json:"total_count"`
+	SuccessCount     int                     `json:"success_count"`
+	FailedCount      int                     `json:"failed_count"`
+	HeldCount        int                     `json:"held_count"`
+	CreatedAt        string                  `json:"created_at"`
+	Transfers        []batchTransferResponse `json:"transfers,omitempty"`
+	ValidationErrors []ValidationError       `json:"validation_errors,omitempty"`
 }
 
 func toBatchResponse(result *Result) batchResponse {
@@ -87,6 +134,8 @@ func toBatchResponse(result *Result) batchResponse {
 			resp.SuccessCount++
 		case domain.StatusFailed:
 			resp.FailedCount++
+		case domain.StatusComplianceHold:
+			resp.HeldCount++
 		}
 		resp.Transfers[i] = batchTransferResponse{
 			ID:        tx.ID,
@@ -114,11 +163,26 @@ func (h *Handler) createBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := make([]Item, len(req.Transfers))
+	var validationErrors []ValidationError
 	for i, t := range req.Transfers {
 		amount, err := decimal.NewFromString(t.Amount)
 		if err != nil || amount.LessThanOrEqual(decimal.Zero) {
-			api.BadRequest(w, "amount must be a positive number")
-			return
+			validationErrors = append(validationErrors, ValidationError{
+				Row:    i + 1,
+				Field:  "amount",
+				Value:  t.Amount,
+				Reason: "amount must be a positive number",
+			})
+			continue
+		}
+		if h.assetIsSupported != nil && !h.assetIsSupported(t.Asset) {
+			validationErrors = append(validationErrors, ValidationError{
+				Row:    i + 1,
+				Field:  "asset",
+				Value:  t.Asset,
+				Reason: "unsupported asset code",
+			})
+			continue
 		}
 		items[i] = Item{
 			ToWalletID: t.ToWalletID,
@@ -126,6 +190,20 @@ func (h *Handler) createBatch(w http.ResponseWriter, r *http.Request) {
 			Amount:     amount,
 			Reference:  t.Reference,
 		}
+	}
+
+	if len(validationErrors) > 0 {
+		details := make([]api.ValidationErrorDetail, len(validationErrors))
+		for i, ve := range validationErrors {
+			details[i] = api.ValidationErrorDetail{
+				Row:    ve.Row,
+				Field:  ve.Field,
+				Value:  ve.Value,
+				Reason: ve.Reason,
+			}
+		}
+		api.BadRequestWithValidationErrors(w, fmt.Sprintf("%d row(s) have validation errors", len(validationErrors)), details)
+		return
 	}
 
 	result, err := h.svc.CreateBatch(r.Context(), req.FromWalletID, items)

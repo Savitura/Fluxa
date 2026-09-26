@@ -1,0 +1,42 @@
+# Development override: bind-mount sources and rebuild on change.
+#
+# Usage (hot reload):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml watch
+#
+# `watch` syncs nothing into the image — instead it rebuilds the api/worker
+# images whenever Go sources change and restarts the containers, so edits
+# take effect without a manual `docker compose up --build`.
+# Plain `up` also works (bind mounts keep the source tree visible for
+# debugging), but file changes only apply after a rebuild.
+
+services:
+  api:
+    volumes:
+      # Source tree is mounted read-only for inspection/debugging. The
+      # running binary lives at /app/api (baked into the image), so the
+      # mount never shadows it.
+      - .:/app/src:ro
+    develop:
+      watch:
+        - path: ./cmd/api
+          action: rebuild
+        - path: ./internal
+          action: rebuild
+        - path: ./go.mod
+          action: rebuild
+        - path: ./go.sum
+          action: rebuild
+
+  worker:
+    volumes:
+      - .:/app/src:ro
+    develop:
+      watch:
+        - path: ./cmd/worker
+          action: rebuild
+        - path: ./internal
+          action: rebuild
+        - path: ./go.mod
+          action: rebuild
+        - path: ./go.sum
+          action: rebuild

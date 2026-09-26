@@ -17,6 +17,7 @@ type Client interface {
 	FindPathsStrict(sourceAccount, destAsset, destIssuer, destAmount string) ([]horizon.Path, error)
 	TransactionDetail(hash string) (horizon.Transaction, error)
 	OperationsForTransaction(hash string) ([]operations.Operation, error)
+	PaymentsForAccount(accountID string, cursor string, limit int) ([]operations.Payment, error)
 	// Payments returns a page of payment operations for an account, starting
 	// strictly after cursor (empty cursor starts from the account's first payment).
 	Payments(accountID, cursor string, limit uint) ([]operations.Operation, error)
@@ -136,4 +137,26 @@ func (c *horizonClient) FindPathsStrict(sourceAccount, destAsset, destIssuer, de
 		return nil, fmt.Errorf("find paths: %w", err)
 	}
 	return paths.Embedded.Records, nil
+}
+
+func (c *horizonClient) PaymentsForAccount(accountID string, cursor string, limit int) ([]operations.Payment, error) {
+	req := horizonclient.OperationRequest{
+		ForAccount: accountID,
+		Limit:      uint(limit),
+		Order:      horizonclient.OrderAsc,
+	}
+	if cursor != "" {
+		req.Cursor = cursor
+	}
+	page, err := c.inner.Payments(req)
+	if err != nil {
+		return nil, fmt.Errorf("payments for account: %w", err)
+	}
+	var payments []operations.Payment
+	for _, r := range page.Embedded.Records {
+		if pay, ok := r.(operations.Payment); ok {
+			payments = append(payments, pay)
+		}
+	}
+	return payments, nil
 }

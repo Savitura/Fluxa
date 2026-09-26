@@ -95,6 +95,10 @@ func (m *mockStellarClient) TransactionDetail(hash string) (horizon.Transaction,
 func (m *mockStellarClient) OperationsForTransaction(hash string) ([]operations.Operation, error) {
 	return nil, nil
 }
+func (m *mockStellarClient) PaymentsForAccount(_ string, _ string, _ int) ([]operations.Payment, error) {
+	return nil, nil
+}
+
 func (m *mockStellarClient) Payments(accountID, cursor string, limit uint) ([]operations.Operation, error) {
 	return nil, nil
 }

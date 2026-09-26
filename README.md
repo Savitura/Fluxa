@@ -1,314 +1,292 @@
 # Fluxa
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 
 **Cross-border payment infrastructure for emerging markets.**
 
-Fluxa is a programmable payments API built on the [Stellar](https://stellar.org) network. It gives fintech products and developers the primitives to move value across borders — wallet management, internal transfers, FX conversion via Stellar path payments, and settlement — behind a clean REST API.
+Fluxa is a programmable payments API built on [Stellar](https://stellar.org). It provides the primitives fintech products need to move value across borders: wallet management, internal transfers, FX conversion via Stellar path payments, and settlement — all behind a clean REST API.
 
-> **Status**: Active development — testnet only.
+## The Problem
 
----
+Moving money across borders in emerging markets is slow, expensive, and opaque. Traditional rails charge 5-10% fees, take days to settle, and require manual reconciliation. Developers building fintech products in these regions have to either build payment infrastructure from scratch or accept the limitations of legacy providers.
 
-## What it does
+## The Solution
 
-- ✅ **Wallets** — create Stellar accounts with AES-256-GCM encrypted secrets; never expose raw keys
-- ✅ **Transfers** — async payment submission with queue-backed retry and status polling
-- ✅ **FX / Conversion** — quote and execute cross-asset swaps via Stellar DEX path payments
-- ✅ **Settlement** — background worker submits transactions to Stellar, handles retries, confirms on-chain
-- ✅ **Ledger indexer** — streams Horizon events to keep local state in sync
-- ✅ **Multi-tenant** — API key + JWT auth; individual developers and business organizations each get scoped access
-- ✅ **Webhooks** — signed delivery of payment events to developer endpoints
-- 🔜 **Sandbox mode** — `sk_test_` keys route to Stellar testnet for safe integration testing
-- ✅ **Recurring payouts** — scheduled transfers with daily/weekly/monthly cadence
-- ✅ **Fiat rails** — deposit/withdrawal via Flutterwave integration
-- ✅ **Organization management** — invite members, role-based access control (owner/admin/dev/viewer)
+Fluxa abstracts the complexity of cross-border payments into a simple API:
+
+- **Custodial wallets** — Create Stellar wallets with encrypted key storage (AES-256-GCM)
+- **Instant transfers** — Move funds between wallets with sub-second finality on Stellar
+- **FX conversion** — Convert between currencies using Stellar path payments with transparent fees
+- **Fiat on/off ramps** — Deposit and withdraw local currency via integrated providers
+- **Compliance screening** — OFAC sanctions checking, velocity limits, and structuring detection
+- **Webhooks** — Real-time notifications with HMAC-SHA256 signature verification
 
 ---
 
 ## Architecture
 
 ```
-Client Applications
-        │  Authorization: Bearer sk_live_... or sk_test_...
+┌─────────────────────────────────────────────────────────────────┐
+│                         Fluxa API                               │
+│  cmd/api                                                        │
+│  ├── REST endpoints (auth, wallets, transfers, FX, webhooks)   │
+│  ├── JWT + API key authentication                               │
+│  └── Idempotency middleware                                     │
+└─────────────────────────────────────────────────────────────────┘
+        │                                    │
+        ▼                                    ▼
+┌───────────────┐                   ┌───────────────────┐
+│  PostgreSQL   │                   │      Redis        │
+│  - Wallets    │                   │  - Job queue      │
+│  - Transfers  │                   │  - Rate limiting  │
+│  - Tenants    │                   │  - FX quote cache │
+└───────────────┘                   └───────────────────┘
+        │
         ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Fluxa REST API                             │
-│  Chi router │ JWT + API key auth │ Rate limiting │ Tenant scope │
+│                       Fluxa Worker                              │
+│  cmd/worker                                                     │
+│  ├── Settlement engine (submits Stellar transactions)          │
+│  ├── Ledger indexer (syncs on-chain state)                     │
+│  ├── Webhook delivery                                           │
+│  ├── Reconciliation (5-minute checks)                          │
+│  ├── Scheduled payouts                                          │
+│  └── OFAC SDN list refresh (daily)                             │
 └─────────────────────────────────────────────────────────────────┘
         │
-        ├── Wallet Service       ──► postgres: wallets, balances
-        ├── Transfer Service     ──► postgres: transactions
-        ├── FX Service           ──► Stellar DEX + rate cache (Redis)
-        ├── Fee Service          ──► postgres: fees, fee_collections
-        └── Webhook Dispatcher   ──► postgres: webhook_endpoints, deliveries
-                │
-                ▼  (Asynq job queue)
-        ┌────────────────────────────────────────┐
-        │           Background Worker             │
-        │  Settlement Engine │ Ledger Indexer     │
-        │  Reconciliation    │ Scheduler          │
-        └────────────────────────────────────────┘
-                │
-                ▼
-        Stellar Network (Horizon API + Soroban RPC)
-        testnet: horizon-testnet.stellar.org
-        mainnet: horizon.stellar.org
+        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Stellar Network                             │
+│  - Horizon API (transaction submission, account queries)       │
+│  - Testnet: horizon-testnet.stellar.org                        │
+│  - Mainnet: horizon.stellar.org                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**Two processes**
+### Key Internal Packages
 
-| Binary | Role |
-|---|---|
-| `cmd/api` | HTTP server — handles all REST requests, enqueues async work |
-| `cmd/worker` | Asynq worker — settles transfers, runs ledger indexer, processes webhooks |
-
-Transfers are **asynchronous**. `POST /v1/transfers` returns `202 Accepted` with a `pending` transaction immediately. Poll `GET /v1/transfers/:id` or receive a `transfer.settled` webhook for the final status.
+| Package | Purpose |
+|---------|---------|
+| `internal/wallet` | Wallet creation, trustlines, balance queries |
+| `internal/transfer` | Transfer initiation and status tracking |
+| `internal/settlement` | Stellar transaction submission |
+| `internal/fx` | FX quotes and conversions via path payments |
+| `internal/compliance` | Sanctions screening, velocity checks |
+| `internal/webhook` | Event delivery with signature verification |
+| `internal/fiat` | Flutterwave/Yellow Card fiat rails |
 
 ---
 
-## Project Structure
+## Quick Start
 
-```
-fluxa/
-├── cmd/
-│   ├── api/main.go           # HTTP server entry point
-│   └── worker/main.go        # Background worker entry point
-├── internal/
-│   ├── config/               # Viper env config
-│   ├── domain/               # Core types: Wallet, Transaction, Conversion, errors
-│   ├── crypto/               # AES-256-GCM encrypt/decrypt (stdlib only)
-│   ├── assets/               # Asset registry: USDC/EURC issuers per network
-│   ├── stellar/              # Horizon client, keypair generation, signer interface
-│   ├── postgres/             # pgx/v5 repository implementations
-│   ├── queue/                # Asynq client + task type definitions
-│   ├── wallet/               # Wallet service + HTTP handler
-│   ├── transfer/             # Transfer service + HTTP handler
-│   ├── batch/                # Batch transfers + CSV export, reuses transfer settlement
-│   ├── schedule/             # Recurring payouts + Asynq periodic task
-│   ├── fx/                   # FX service + rate providers + HTTP handler
-│   ├── fees/                 # Fee calculation and collection
-│   ├── settlement/           # Settlement engine + Asynq task handler
-│   ├── indexer/              # Ledger indexer + Asynq periodic task
-│   ├── webhook/              # Webhook dispatcher + delivery worker
-│   ├── reconcile/            # DB vs on-chain reconciliation
-│   ├── apikey/               # API key generation, hashing, verification
-│   ├── auth/                 # User registration, login, JWT
-│   ├── org/                  # Organization members, roles
-│   ├── fiat/                 # Fiat rail abstraction + provider adapters
-│   ├── alerting/             # Alerting client for platform notifications
-│   ├── tenant/               # Tenant context helpers
-│   ├── server/               # Chi router setup, middleware
-│   └── api/                  # Shared request validation + response helpers
-└── db/
-    └── migrations/           # golang-migrate SQL files (numbered up/down pairs)
-```
+### Option 1: Docker (Recommended)
 
----
-
-## Getting Started
-
-### Prerequisites
-
-- Go 1.22+
-- PostgreSQL 15+
-- Redis 7+
-
-The repository root is a Go backend workspace. It does not require root-level
-Node.js, TypeScript, Prisma, or BullMQ tooling to build or run the API and
-worker.
-
-### 1. Clone and install
+The fastest way to run Fluxa locally:
 
 ```bash
-git clone https://github.com/Savitura/Fluxa
+# Clone the repository
+git clone https://github.com/Savitura/Fluxa.git
+cd Fluxa
+
+# Generate an encryption key
+export MASTER_ENCRYPTION_KEY=$(openssl rand -hex 32)
+
+# Start all services
+docker compose up --build -d
+
+# Check health
+curl http://localhost:3000/health
+```
+
+This starts:
+- **API** on `http://localhost:3000`
+- **Worker** for background jobs
+- **PostgreSQL 15** on port 5432
+- **Redis 7** on port 6379
+- **Migrate** (one-shot): runs `api -migrate-only` before the API/worker boot, so the database is always on the latest schema — no manual `make migrate` needed.
+
+Images are built from `Dockerfile.api` (`cmd/api`) and `Dockerfile.worker` (`cmd/worker`).
+
+For development with hot reload (rebuilds + restarts on source changes):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml watch
+```
+
+The dev override bind-mounts the source tree (read-only, for inspection) and watches `cmd/`, `internal/`, and `go.mod`/`go.sum`.
+
+### Option 2: Local Development
+
+Prerequisites: Go 1.22+, PostgreSQL 15+, Redis 7+
+
+```bash
+# Clone and setup
+git clone https://github.com/Savitura/Fluxa.git
 cd Fluxa
 go mod tidy
-```
 
-### 2. Configure environment
-
-```bash
+# Configure environment
 cp .env.example .env
-```
+# Edit .env:
+#   DATABASE_URL=postgresql://user:password@localhost:5432/fluxa?sslmode=disable
+#   REDIS_URL=redis://localhost:6379
+#   MASTER_ENCRYPTION_KEY=<output of: openssl rand -hex 32>
 
-| Variable | Description |
-|---|---|
-| `PORT` | HTTP listen port (default: `3000`) |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `REDIS_URL` | Redis connection string |
-| `STELLAR_NETWORK` | `testnet` or `mainnet` |
-| `STELLAR_HORIZON_URL` | Horizon endpoint |
-| `STELLAR_USDC_ISSUER` | USDC issuer public key |
-| `MASTER_ENCRYPTION_KEY` | 64 hex chars (32 bytes) — encrypts stored wallet secrets |
-| `PLATFORM_FEE_WALLET_PUBLIC_KEY` | Stellar address where platform fees are collected |
-| `TREASURY_SECRET_KEY` | Stellar key that funds new accounts (testnet: leave empty, use Friendbot) |
-
-Generate a master key:
-```bash
-openssl rand -hex 32
-```
-
-### 3. Run migrations
-
-```bash
+# Run migrations
 make migrate
-```
 
-### 4. Start the API and worker
-
-```bash
-# Terminal 1
+# Start the API (Terminal 1)
 make run-api
 
-# Terminal 2
+# Start the worker (Terminal 2)
 make run-worker
 ```
 
 ---
 
-## API Reference
+## Demo Walkthrough
 
-All endpoints are prefixed `/v1`. Auth: `Authorization: Bearer <api_key_or_jwt>`. Errors:
+Once Fluxa is running locally, try the complete flow:
 
-```json
-{ "error": { "code": "WALLET_NOT_FOUND", "message": "wallet not found" } }
-```
-
-### Authentication
-
-```http
-POST /v1/auth/register     Create account (individual or organization)
-POST /v1/auth/login        Login — returns JWT
-POST /v1/auth/refresh      Refresh access token
-POST /v1/keys              Create API key  →  sk_live_... or sk_test_...
-GET  /v1/keys              List keys (prefix only, never raw)
-DELETE /v1/keys/:id        Revoke key
-```
-
-### Wallets
-
-```http
-POST /v1/wallets           Create wallet — returns public key only
-GET  /v1/wallets/:id/balances   Live balances from Horizon (all assets)
-POST /v1/wallets/:id/trustlines  Add Stellar trustline for a new asset
-```
-
-### Transfers
-
-```http
-POST /v1/transfers         Initiate transfer (202 Accepted — async)
-GET  /v1/transfers/:id     Poll status
-GET  /v1/transfers         List (filter by wallet, status, date)
-POST /v1/transfers/batch   Up to 100 transfers in one call
-GET  /v1/transfers/batch/:batchId          Batch status with per-transfer breakdown
-GET  /v1/transfers/batch/:batchId/export   CSV download of batch results
-```
-
-**Status flow:** `pending` → `confirmed` | `failed`
-
-**Batch status** is derived live from its linked transactions: `pending` → `processing` → `partial` | `completed` | `failed`.
-
-### Scheduled Payouts
-
-```http
-POST   /v1/schedules       Create a recurring transfer (daily | weekly | monthly)
-GET    /v1/schedules       List schedules
-PATCH  /v1/schedules/:id   Pause, resume, or update amount/frequency/end_date
-DELETE /v1/schedules/:id   Cancel a schedule
-```
-
-A background worker checks for due schedules every minute and enqueues a normal transfer for each one — a paused schedule is skipped until resumed.
-
-### FX
-
-```http
-POST /v1/fx/quote          Get a 30-second exchange rate quote
-POST /v1/fx/convert        Execute a currency swap
-GET  /v1/fx/rates          Live rates for a currency pair
-```
-
-### Webhooks
-
-```http
-POST   /v1/webhooks        Register endpoint + event subscriptions
-GET    /v1/webhooks        List endpoints
-DELETE /v1/webhooks/:id    Remove endpoint
-GET    /v1/webhooks/:id/deliveries  Delivery log
-```
-
-**Event types:** `transfer.initiated` · `transfer.settled` · `transfer.failed` · `wallet.funded` · `conversion.completed`
-
-### Fees
-
-```http
-GET /v1/fees               Your fee schedule (transfer/conversion fee rates)
-```
-
-### Organization
-
-```http
-POST /v1/org/members/invite     Invite member to organization
-GET  /v1/org/members            List organization members
-PATCH  /v1/org/members/{userId}   Update member role
-DELETE /v1/org/members/{userId}   Remove member
-POST /v1/org/invites/accept     Accept organization invite (public)
-```
-
-### Fiat Rails
-
-```http
-POST /v1/wallets/{id}/deposit/fiat   Initiate fiat deposit
-POST /v1/wallets/{id}/withdraw/fiat  Initiate fiat withdrawal
-POST /v1/webhooks/fiat/{provider}   Fiat provider webhook receiver
-```
-
-### Health
-
-```http
-GET /health                Health check
-```
-
----
-
-## Security
-
-- **Key storage**: Stellar secrets are encrypted with AES-256-GCM before storage. The 32-byte master key lives only in env — never in the database or logs.
-- **No key exposure**: Secret keys are never returned by any API endpoint.
-- **Signer abstraction**: `stellar.Signer` in `internal/stellar/signer.go` isolates all signing. Swap `EnvSigner` for HSM or AWS KMS without touching the settlement engine.
-- **Decimal arithmetic**: All monetary values use `shopspring/decimal` — no floating-point.
-- **API key hashing**: Raw keys are SHA-256 hashed before storage; the plaintext is shown exactly once on creation.
-
----
-
-## Development
+### 1. Register and get a JWT
 
 ```bash
-make test          # go test ./... -race
-make test-cover    # with HTML coverage report
-make lint          # golangci-lint
-make build         # outputs bin/api + bin/worker
-make tidy          # go mod tidy
+curl -X POST http://localhost:3000/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Demo Fintech",
+    "email": "demo@example.com",
+    "password": "secure-password-123"
+  }'
 ```
 
-Fund a testnet wallet:
+Response:
+```json
+{
+  "user": {
+    "id": "0193b0b4-1b33-7e9a-bcf6-...",
+    "email": "demo@example.com",
+    "name": "Demo Fintech",
+    "created_at": "2026-06-22T12:00:00Z"
+  },
+  "tenant": {
+    "id": "0193b0b4-1b33-7e9a-bcf6-...",
+    "name": "Demo Fintech",
+    "created_at": "2026-06-22T12:00:00Z"
+  },
+  "role": "owner",
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "refresh_token": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
+
+Use the `access_token` as `Authorization: Bearer <access_token>`. (`POST /v1/auth/login` with `{ "email", "password" }` returns the same shape; `POST /v1/auth/refresh` with `{ "refresh_token" }` mints a new pair.)
+
+### 2. Create an API key
+
+```bash
+curl -X POST http://localhost:3000/v1/keys \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <jwt_token>" \
+  -d '{"label": "Demo Key"}'
+```
+
+Save the `key` value — it's shown only once.
+
+### 3. Create a wallet
+
+```bash
+curl -X POST http://localhost:3000/v1/wallets \
+  -H "Authorization: Bearer sk_live_..."
+```
+
+### 4. Fund it on testnet
+
 ```bash
 curl "https://friendbot.stellar.org?addr=<PUBLIC_KEY>"
 ```
 
+### 5. Check balances
+
+```bash
+curl -H "Authorization: Bearer sk_live_..." \
+  "http://localhost:3000/v1/wallets/<wallet_id>/balances"
+```
+
+### 6. Transfer between wallets
+
+Create a second wallet, fund it, then transfer:
+
+```bash
+curl -X POST http://localhost:3000/v1/transfers \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Idempotency-Key: 123e4567-e89b-42d3-a456-426614174000" \
+  -d '{
+    "from_wallet_id": "<sender_id>",
+    "to_wallet_id": "<recipient_id>",
+    "asset": "XLM",
+    "amount": "10.0000000"
+  }'
+```
+
+The transfer returns `202 Accepted` with `status: pending`. The worker submits the Stellar transaction in the background. Poll the transfer endpoint or register a webhook to get notified when it settles.
+
+See [docs/quickstart.md](docs/quickstart.md) for the complete 10-step integration guide including USDC trustlines, FX quotes, and webhooks.
+
 ---
 
-## Part of Savitura
+## Configuration
 
-- **[CrowdPay](https://github.com/Savitura/crowdpay)** — crowdfunding platform built on top of Fluxa payment rails
-- **[SaviTools](https://github.com/Savitura/Savitools)** — developer tools: API playground, transaction inspector, wallet sandbox
+Key environment variables (see [.env.example](.env.example) for the full list):
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection string |
+| `MASTER_ENCRYPTION_KEY` | 64-char hex string for wallet key encryption |
+| `STELLAR_NETWORK` | `testnet` or `pubnet` |
+| `STELLAR_HORIZON_URL` | Horizon API endpoint |
+| `COMPLIANCE_ENABLED` | Enable OFAC screening (recommended in production) |
 
 ---
 
-## Contributing
+## TypeScript SDK
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+```bash
+npm install @savitura/fluxa
+```
+
+```typescript
+import { FluxaClient } from "@savitura/fluxa";
+
+const client = new FluxaClient({ apiKey: "sk_live_..." });
+
+const wallet = await client.wallets.create();
+const tx = await client.transfers.create({
+  from_wallet_id: wallet.id,
+  to_wallet_id: "recipient-id",
+  asset: "USDC",
+  amount: "100.0000000",
+});
+```
+
+See [sdk/README.md](sdk/README.md) for full documentation.
+
+---
+
+## Documentation
+
+- [Quickstart Guide](docs/quickstart.md) — Complete integration walkthrough
+- [Error Reference](docs/errors.md) — API error codes and resolutions
+- [Idempotency](docs/idempotency.md) — Safe retries with idempotency keys
+- [Webhook Verification](docs/webhook-verification/README.md) — Signature verification in Go/TypeScript
+- [Failover](FAILOVER.md) — Multi-region deployment and disaster recovery
+- [Contributing](CONTRIBUTING.md) — Development setup and contribution guidelines
+
+---
 
 ## License
 
-MIT
+[MIT](LICENSE)

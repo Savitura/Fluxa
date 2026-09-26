@@ -9,15 +9,14 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
 type ScheduleRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewScheduleRepo(db *pgxpool.Pool) *ScheduleRepo {
+func NewScheduleRepo(db DB) *ScheduleRepo {
 	return &ScheduleRepo{db: db}
 }
 
@@ -145,7 +144,7 @@ func scanSchedule(row rowScanner) (*domain.Schedule, error) {
 
 func (r *ScheduleRepo) Claim(ctx context.Context, id string, expectedNextRunAt time.Time) (bool, error) {
 	query := `UPDATE schedules SET status = $1, updated_at = $2 WHERE id = $3 AND status = $4 AND next_run_at = $5`
-	
+
 	tag, err := r.db.Exec(ctx, query, domain.ScheduleStatusProcessing, time.Now().UTC(), id, domain.ScheduleStatusActive, expectedNextRunAt)
 	if err != nil {
 		return false, fmt.Errorf("claim schedule: %w", err)

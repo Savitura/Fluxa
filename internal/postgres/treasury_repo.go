@@ -8,15 +8,14 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/treasury"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
 type TreasuryRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewTreasuryRepo(db *pgxpool.Pool) *TreasuryRepo {
+func NewTreasuryRepo(db DB) *TreasuryRepo {
 	return &TreasuryRepo{db: db}
 }
 

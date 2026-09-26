@@ -8,14 +8,13 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type AnchorRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewAnchorRepo(db *pgxpool.Pool) *AnchorRepo {
+func NewAnchorRepo(db DB) *AnchorRepo {
 	return &AnchorRepo{db: db}
 }
 
@@ -169,7 +168,7 @@ func (r *AnchorRepo) UpdateTransactionStatus(ctx context.Context, id, status str
 	args := []interface{}{status, completedAt, id}
 
 	if tenantID != nil {
-		// Need to enforce tenant ownership during update. 
+		// Need to enforce tenant ownership during update.
 		// Since we cannot easily join in an UPDATE without FROM, we can use a subquery in WHERE.
 		query += ` AND wallet_id IN (SELECT id FROM wallets WHERE tenant_id = $4)`
 		args = append(args, *tenantID)

@@ -1,10 +1,10 @@
 package server
 
 import (
+	"context"
 	"net/http"
-	"time"
-
 	"strings"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/apikey"
 	"github.com/fluxa/fluxa/internal/auth"
@@ -61,18 +61,40 @@ func recoverer(next http.Handler) http.Handler {
 	})
 }
 
-func CORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-Request-ID")
-		w.Header().Set("Access-Control-Max-Age", "86400")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
+	originSet := make(map[string]struct{}, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		originSet[strings.TrimSpace(o)] = struct{}{}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if _, ok := originSet[origin]; ok || (len(originSet) == 1 && originSet["*"] == struct{}{}) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			} else {
+				// Handle prefix matching for things like localhost:*
+				for allowed := range originSet {
+					if strings.HasSuffix(allowed, "*") {
+						prefix := strings.TrimSuffix(allowed, "*")
+						if strings.HasPrefix(origin, prefix) {
+							w.Header().Set("Access-Control-Allow-Origin", origin)
+							break
+						}
+					}
+				}
+			}
+
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-Request-ID")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {
@@ -84,7 +106,17 @@ func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {
 	}
 }
 
-func AuthMiddleware(repo *postgres.APIKeyRepo, jwtSecret []byte) func(http.Handler) http.Handler {
+// MembershipValidator revalidates a user's current membership and role
+// against the database on every authenticated request.
+type MembershipValidator interface {
+	GetMember(ctx context.Context, tenantID, userID string) (*domain.OrgMember, error)
+}
+
+// AuthMiddleware validates the JWT or API key and, for JWT auth, revalidates
+// the user's membership and role against the database so that demotions,
+// removals, and role changes take effect immediately rather than at token
+// expiry.
+func AuthMiddleware(repo *postgres.APIKeyRepo, jwtSecret []byte, validator MembershipValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -99,6 +131,17 @@ func AuthMiddleware(repo *postgres.APIKeyRepo, jwtSecret []byte) func(http.Handl
 			if strings.Count(rawToken, ".") == 2 {
 				claims, err := auth.ParseToken(rawToken, jwtSecret)
 				if err == nil && claims.TokenType == "access" {
+					// Revalidate membership against the database so stale tokens
+					// cannot be used after removal or demotion.
+					if validator != nil {
+						member, mErr := validator.GetMember(r.Context(), claims.TenantID, claims.Sub)
+						if mErr != nil || member == nil {
+							http.Error(w, "membership not found or revoked", http.StatusForbidden)
+							return
+						}
+						// Use the current role from the database, not the stale JWT claim.
+						claims.Role = member.Role
+					}
 					ctx := tenant.WithID(r.Context(), claims.TenantID)
 					ctx = tenant.WithUser(ctx, claims.Sub, claims.Role)
 					next.ServeHTTP(w, r.WithContext(ctx))

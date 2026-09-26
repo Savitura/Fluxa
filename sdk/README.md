@@ -15,7 +15,7 @@ Requires Node.js >= 18.
 ```ts
 import { FluxaClient } from "@savitura/fluxa";
 
-const client = new FluxaClient({ apiKey: "fx_sk_..." });
+const client = new FluxaClient({ apiKey: "sk_live_..." });
 
 // Create a wallet
 const wallet = await client.wallets.create();
@@ -37,7 +37,7 @@ const tx = await client.transfers.create({
 
 ```ts
 const client = new FluxaClient({
-  apiKey: "fx_sk_...",         // Required
+  apiKey: "sk_live_...",         // Required
   baseUrl: "https://api.fluxa.io", // Default
   timeout: 30000,              // 30s default
   maxRetries: 3,               // Exponential backoff for 5xx/network errors

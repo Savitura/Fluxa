@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -96,6 +97,13 @@ type DriftSnapshot struct {
 type Repository interface {
 	GetConfirmedTxesForReconciliation(ctx context.Context, since time.Duration) ([]*domain.Transaction, error)
 	GetStuckPendingTxes(ctx context.Context, olderThan time.Duration) ([]*domain.Transaction, error)
+	// ResetStuckSubmittedToPending recovers a transaction claimed
+	// (status=submitted) by a worker that crashed before recording a
+	// tx_hash, so nothing may have reached the network. Gated on age so an
+	// in-flight worker still within its normal processing window is never
+	// touched. No-op (via domain.ErrConcurrentUpdate) for a pending
+	// transaction, which needs no reset before being re-enqueued.
+	ResetStuckSubmittedToPending(ctx context.Context, id string, olderThan time.Duration) error
 	GetPendingTxesForReconciliation(ctx context.Context, olderThan time.Duration) ([]*domain.Transaction, error)
 	UpdateReconciliationStatus(ctx context.Context, id string, status domain.TransactionStatus) error
 	UpdateTxConfirmed(ctx context.Context, id, txHash string) error
@@ -133,7 +141,6 @@ type WalletLookup interface {
 type Service struct {
 	repo              Repository
 	walletRepo        WalletRepository
-	driftRepo         DriftRepository
 	walletLookup      WalletLookup
 	stellar           stellar.Client
 	alerting          *alerting.Client
@@ -141,11 +148,8 @@ type Service struct {
 	webhookSvc        webhook.Service
 	svcName           string
 	balanceThreshold  decimal.Decimal
-	driftThreshold    decimal.Decimal
 	assetRegistry     *assets.Registry
 	platformFeeWallet string
-	driftMu           sync.RWMutex
-	currentDrift      map[string]DriftSnapshot
 }
 
 func NewService(
@@ -318,6 +322,11 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 	if horizonTx.Successful {
 		// On-chain confirmed but DB still shows pending ΓåÆ correct to confirmed.
 		if updateErr := s.repo.UpdateTxConfirmed(ctx, tx.ID, tx.TxHash); updateErr != nil {
+			if errors.Is(updateErr, domain.ErrConcurrentUpdate) {
+				log.Warn().Str("tx_id", tx.ID).
+					Msg("reconcile: concurrent update already handled pending→confirmed")
+				return true, false, nil
+			}
 			return true, false, fmt.Errorf("update tx %s to confirmed: %w", tx.ID, updateErr)
 		}
 		log.Info().Str("tx_id", tx.ID).Str("tx_hash", tx.TxHash).
@@ -328,6 +337,11 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 
 	// On-chain failed but DB still shows pending ΓåÆ correct to failed.
 	if updateErr := s.repo.UpdateTxFailed(ctx, tx.ID); updateErr != nil {
+		if errors.Is(updateErr, domain.ErrConcurrentUpdate) {
+			log.Warn().Str("tx_id", tx.ID).
+				Msg("reconcile: concurrent update already handled pending→failed")
+			return true, false, nil
+		}
 		return true, false, fmt.Errorf("update tx %s to failed: %w", tx.ID, updateErr)
 	}
 	log.Info().Str("tx_id", tx.ID).Str("tx_hash", tx.TxHash).
@@ -350,6 +364,34 @@ func (s *Service) dispatchWebhook(ctx context.Context, event domain.EventType, t
 	if err := s.webhookSvc.Dispatch(ctx, event, payload); err != nil {
 		log.Error().Err(err).Str("tx_id", tx.ID).Str("event", string(event)).Msg("reconcile: dispatch webhook")
 	}
+}
+
+// ForceSettle enqueues a settlement task for a specific transfer so the
+// settlement worker can process it. This is used by the admin force-settle
+// endpoint to re-trigger settlement for a stuck transfer without duplicating
+// worker logic.
+func (s *Service) ForceSettle(ctx context.Context, transferID string) error {
+	payload := map[string]interface{}{
+		"transfer_id": transferID,
+	}
+	if err := s.queue.Enqueue(ctx, "settle_transfer", payload); err != nil {
+		return fmt.Errorf("enqueue force-settle for transfer %s: %w", transferID, err)
+	}
+	log.Info().Str("transfer_id", transferID).Msg("reconcile: force-settle enqueued")
+	return nil
+}
+
+// ReconcileWallet enqueues a one-off reconciliation task for a wallet. The
+// worker will compare DB balances to Horizon and report any drift.
+func (s *Service) ReconcileWallet(ctx context.Context, walletID string) error {
+	payload := map[string]interface{}{
+		"wallet_id": walletID,
+	}
+	if err := s.queue.Enqueue(ctx, "reconcile_wallet", payload); err != nil {
+		return fmt.Errorf("enqueue wallet reconciliation for %s: %w", walletID, err)
+	}
+	log.Info().Str("wallet_id", walletID).Msg("reconcile: wallet reconciliation enqueued")
+	return nil
 }
 
 // Reconcile verifies confirmed transactions against Horizon and flags
@@ -640,6 +682,36 @@ func (s *Service) RecoverPending(ctx context.Context) error {
 	log.Info().Int("count", len(txes)).Msg("reconcile: recovering stuck pending transactions")
 
 	for _, tx := range txes {
+		// Defence in depth, and checked first so no later branch can act on a
+		// held transfer. GetStuckPendingTxes selects pending rows and
+		// submitted-without-hash rows, so a compliance_hold row should never
+		// appear here — but such a transfer is waiting on a human, not stuck,
+		// and re-enqueuing one would release a payment compliance
+		// deliberately stopped. Re-asserting the invariant here keeps it
+		// testable and means a future widening of that query cannot quietly
+		// become a compliance bypass.
+		if tx.Status == domain.StatusComplianceHold {
+			log.Warn().Str("tx_id", tx.ID).
+				Msg("reconcile: skipping transaction held for compliance review")
+			continue
+		}
+
+		if tx.Status == domain.StatusSubmitted {
+			// This row was claimed by a worker that crashed before it could
+			// record a tx_hash — nothing may have reached the network. Reset
+			// it to pending so ClaimForSubmission (deliberately strict:
+			// pending-only) will accept a fresh attempt.
+			if err := s.repo.ResetStuckSubmittedToPending(ctx, tx.ID, stuckThreshold); err != nil {
+				if errors.Is(err, domain.ErrConcurrentUpdate) {
+					log.Info().Str("tx_id", tx.ID).
+						Msg("reconcile: stuck submitted tx no longer eligible for reset (already progressed)")
+				} else {
+					log.Error().Err(err).Str("tx_id", tx.ID).Msg("reconcile: reset stuck submitted tx to pending")
+				}
+				continue
+			}
+		}
+
 		newCount, err := s.repo.IncrementRequeueCount(ctx, tx.ID)
 		if err != nil {
 			log.Error().Err(err).Str("tx_id", tx.ID).Msg("reconcile: increment requeue count")
@@ -707,14 +779,13 @@ func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) erro
 		return fmt.Errorf("get DB balances for wallet %s: %w", w.ID, err)
 	}
 
+	// Build asset → balance map from Horizon, keyed by canonical identity
+	// (e.g. "XLM" for native, "USDC:GXXXX" for credit assets).
 	horizonBalances := make(map[string]decimal.Decimal)
-	for _, balance := range acct.Balances {
-		amount, parseErr := decimal.NewFromString(balance.Balance)
-		if parseErr != nil {
-			return fmt.Errorf("parse Horizon balance %s for wallet %s: %w", balance.Balance, w.PublicKey, parseErr)
-		}
-		asset := assetCode(&balance)
-		horizonBalances[asset] = horizonBalances[asset].Add(amount)
+	for _, b := range acct.Balances {
+		asset := horizonAssetIdentity(&b)
+		amt, _ := decimal.NewFromString(b.Balance)
+		horizonBalances[asset] = horizonBalances[asset].Add(amt)
 	}
 
 	assets := make(map[string]struct{}, len(dbBalances)+len(horizonBalances))
@@ -731,37 +802,10 @@ func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) erro
 	}
 	logger := tracing.Logger(ctx)
 	for asset := range assets {
-		expected := dbBalances[asset]
-		actual := horizonBalances[asset]
-		drift := expected.Sub(actual).Abs()
-		now := time.Now().UTC()
-		tenantID := ""
-		if w.TenantID != nil {
-			tenantID = *w.TenantID
-		}
-		snapshot := &DriftSnapshot{
-			ID:              uuid.New().String(),
-			TenantID:        tenantID,
-			WalletID:        w.ID,
-			WalletAddress:   w.PublicKey,
-			Asset:           asset,
-			ExpectedBalance: expected,
-			ActualBalance:   actual,
-			DriftAmount:     drift,
-			Threshold:       threshold,
-			DetectedAt:      now,
-		}
-		s.driftMu.Lock()
-		s.currentDrift[w.ID+"|"+asset] = *snapshot
-		s.driftMu.Unlock()
-		if s.driftRepo != nil {
-			if writeErr := s.driftRepo.WriteDriftSnapshot(ctx, snapshot); writeErr != nil {
-				logger.Error().Err(writeErr).Str("wallet_id", w.ID).Str("asset", asset).
-					Msg("reconcile: write drift snapshot")
-			}
-		}
-
-		if drift.LessThanOrEqual(threshold) {
+		dbAmt := dbBalances[asset] // zero-value decimal if key absent
+		horizonAmt := horizonBalances[asset]
+		diff := dbAmt.Sub(horizonAmt).Abs()
+		if diff.LessThanOrEqual(s.balanceThreshold) {
 			continue
 		}
 
@@ -816,28 +860,14 @@ func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) erro
 	return nil
 }
 
-func (s *Service) GetDrift(ctx context.Context) ([]*DriftSnapshot, error) {
-	if s.driftRepo != nil {
-		snapshots, err := s.driftRepo.ListCurrentDrift(ctx)
-		if err == nil {
-			return snapshots, nil
-		}
-	}
-	s.driftMu.RLock()
-	defer s.driftMu.RUnlock()
-	snapshots := make([]*DriftSnapshot, 0, len(s.currentDrift))
-	for _, snapshot := range s.currentDrift {
-		copy := snapshot
-		snapshots = append(snapshots, &copy)
-	}
-	return snapshots, nil
-}
-
-func assetCode(b *horizon.Balance) string {
+// horizonAssetIdentity returns a canonical string that uniquely identifies a
+// Horizon balance asset: "XLM" for native, or "CODE:ISSUER" for credit assets.
+// This ensures two issuers sharing the same asset code are compared independently.
+func horizonAssetIdentity(b *horizon.Balance) string {
 	if b.Asset.Type == "native" {
 		return "XLM"
 	}
-	return b.Asset.Code
+	return b.Asset.Code + ":" + b.Asset.Issuer
 }
 
 func (s *Service) GetSummary(ctx context.Context, days int) (*SummaryResponse, error) {

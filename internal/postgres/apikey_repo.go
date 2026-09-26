@@ -7,14 +7,13 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type APIKeyRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewAPIKeyRepo(db *pgxpool.Pool) *APIKeyRepo {
+func NewAPIKeyRepo(db DB) *APIKeyRepo {
 	return &APIKeyRepo{db: db}
 }
 

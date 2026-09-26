@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdnList xmlns="http://tempuri.org/sdnList.xsd">
+  <publshInformation>
+    <Publish_Date>01/15/2026</Publish_Date>
+    <Record_Count>4</Record_Count>
+  </publshInformation>
+  <sdnEntry>
+    <uid>10001</uid>
+    <firstName>Ayman</firstName>
+    <lastName>Zawahiri</lastName>
+    <sdnType>Individual</sdnType>
+    <programList>
+      <program>SDGT</program>
+    </programList>
+    <akaList>
+      <aka>
+        <uid>20001</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <firstName>Aiman</firstName>
+        <lastName>Zawahri</lastName>
+      </aka>
+    </akaList>
+    <idList>
+      <id>
+        <uid>30001</uid>
+        <idType>Digital Currency Address - XLM</idType>
+        <idNumber>GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABLOK</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>10002</uid>
+    <lastName>NORTH KOREA MINING TRADING CORP</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>DPRK</program>
+      <program>NPWMD</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>30002</uid>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2</idNumber>
+      </id>
+      <id>
+        <uid>30003</uid>
+        <idType>Digital Currency Address - XLM</idType>
+        <idNumber>GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBDPRK</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>10003</uid>
+    <firstName>Maria</firstName>
+    <lastName>Sanchez Delgado</lastName>
+    <sdnType>Individual</sdnType>
+    <programList>
+      <program>SDNTK</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>30004</uid>
+        <idType>Passport</idType>
+        <idNumber>X9911223</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>10004</uid>
+    <lastName>QUIET SHIPPING LLC</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>IRAN</program>
+    </programList>
+  </sdnEntry>
+</sdnList>

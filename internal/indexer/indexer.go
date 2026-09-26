@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -24,6 +25,8 @@ const (
 	streamMinBackoff = 1 * time.Second
 	streamMaxBackoff = 30 * time.Second
 )
+
+const syncPageSize = 100
 
 type Indexer struct {
 	walletRepo wallet.Repository
@@ -58,14 +61,14 @@ func (idx *Indexer) SyncAll(ctx context.Context, limit, offset int) error {
 // It persists the account's current balances and processes every payment
 // operation since the wallet's stored cursor, advancing the cursor as it goes
 // so a subsequent call resumes rather than reprocessing history.
+// TenantID is set from the indexed wallet on every created transaction.
 func (idx *Indexer) SyncWallet(ctx context.Context, w *domain.Wallet) error {
 	acct, err := stellar.LoadAccountWithContext(ctx, idx.stellar, w.PublicKey)
 	if err != nil {
-		hErr, ok := err.(*horizonclient.Error)
-		if ok && hErr.Response.Status == "404" {
-			return nil // account not yet funded ΓÇö nothing to sync
+		if isNotFound(err) {
+			return nil // account not yet funded — nothing to sync
 		}
-		return fmt.Errorf("load account: %w", err)
+		return fmt.Errorf("load account %s: %w", w.PublicKey, err)
 	}
 
 	if err := idx.persistBalances(ctx, w.ID, acct); err != nil {
@@ -216,7 +219,7 @@ func (idx *Indexer) processPayment(ctx context.Context, w *domain.Wallet, op ope
 		return nil
 	}
 
-	tx, err := newInboundTransaction(w.ID, w.PublicKey, hash, asset, amount)
+	tx, err := newInboundTransaction(w.ID, w.PublicKey, hash, asset, amount, w.TenantID)
 	if err != nil {
 		return fmt.Errorf("build inbound transaction %s: %w", hash, err)
 	}
@@ -251,7 +254,8 @@ func assetCode(assetType, code string) string {
 	return code
 }
 
-func newInboundTransaction(walletID, publicKey, txHash, asset, amount string) (*domain.Transaction, error) {
+// newInboundTransaction creates a confirmed inbound transaction with the wallet's tenant identity.
+func newInboundTransaction(walletID, publicKey, txHash, asset, amount string, tenantID *string) (*domain.Transaction, error) {
 	amt, err := decimal.NewFromString(amount)
 	if err != nil {
 		return nil, err
@@ -264,6 +268,15 @@ func newInboundTransaction(walletID, publicKey, txHash, asset, amount string) (*
 		ToWallet:  walletID,
 		Asset:     asset,
 		Amount:    amt,
+		TenantID:  tenantID,
 		CreatedAt: time.Now().UTC(),
 	}, nil
+}
+
+func isNotFound(err error) bool {
+	var hErr *horizonclient.Error
+	if errors.As(err, &hErr) && hErr.Response != nil && hErr.Response.StatusCode == 404 {
+		return true
+	}
+	return false
 }

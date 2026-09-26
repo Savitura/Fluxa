@@ -19,23 +19,26 @@ import (
 )
 
 const (
-	quoteTTL        = 30 * time.Second
-	quoteKeyPrefix  = "fx:quote:"
-	refreshInterval = 30 * time.Second
+	quoteTTL          = 30 * time.Second
+	quoteKeyPrefix    = "fx:quote:"
+	refreshInterval   = 30 * time.Second
+	activePairMaxIdle = 10 * time.Minute
 )
 
 // Quote is a priced, time-limited conversion offer identified by a unique token.
 type Quote struct {
-	ID         string          `json:"id"`
-	OrgID      string          `json:"org_id"`
-	FromAsset  string          `json:"from_asset"`
-	ToAsset    string          `json:"to_asset"`
-	FromAmount decimal.Decimal `json:"from_amount"`
-	ToAmount   decimal.Decimal `json:"to_amount"`
-	Rate       decimal.Decimal `json:"rate"`
-	Fee        decimal.Decimal `json:"fee"`
-	ExpiresAt  time.Time       `json:"expires_at"`
-	Used       bool            `json:"used"`
+	ID                      string          `json:"id"`
+	OrgID                   string          `json:"org_id"`
+	FromAsset               string          `json:"from_asset"`
+	ToAsset                 string          `json:"to_asset"`
+	FromAmount              decimal.Decimal `json:"from_amount"`
+	ToAmount                decimal.Decimal `json:"to_amount"`
+	Rate                    decimal.Decimal `json:"rate"`
+	Fee                     decimal.Decimal `json:"fee"`
+	ExpiresAt               time.Time       `json:"expires_at"`
+	Used                    bool            `json:"used"`
+	FromRequiresTrustline   bool            `json:"from_requires_trustline"`
+	ToRequiresTrustline     bool            `json:"to_requires_trustline"`
 }
 
 // FXQuoteAuditRepo persists quote snapshots as an audit trail.
@@ -63,14 +66,14 @@ type service struct {
 	auditRepo      FXQuoteAuditRepo
 	feeSvc         fees.Service
 	stellar        stellar.Client
-	redis          *redis.Client
+	redis          redis.UniversalClient
 	rateCache      *RateCache
 	usdcIssuer     string
 	providers      []Provider
 	spreadBps      int
 
 	activePairsMu sync.RWMutex
-	activePairs   map[string]struct{}
+	activePairs   map[string]time.Time
 }
 
 // markUsedScript atomically checks and marks a quote as used.
@@ -92,7 +95,7 @@ func NewService(
 	auditRepo FXQuoteAuditRepo,
 	feeSvc fees.Service,
 	stellarClient stellar.Client,
-	redisClient *redis.Client,
+	redisClient redis.UniversalClient,
 	usdcIssuer string,
 	providers []Provider,
 	spreadBps int,
@@ -108,7 +111,7 @@ func NewService(
 		usdcIssuer:     usdcIssuer,
 		providers:      providers,
 		spreadBps:      spreadBps,
-		activePairs:    make(map[string]struct{}),
+		activePairs:    make(map[string]time.Time),
 	}
 	go s.backgroundRefresh(context.Background())
 	return s
@@ -117,14 +120,25 @@ func NewService(
 // GetQuote prices a conversion, stores the quote in Redis with a 30-second TTL,
 // and writes an audit row to Postgres. Returns the quote with its ID token.
 func (s *service) GetQuote(ctx context.Context, fromAsset, toAsset, amount string) (*Quote, error) {
+	fromAsset, toAsset, err := validateFXPair(fromAsset, toAsset)
+	if err != nil {
+		return nil, err
+	}
+
 	rateResp, err := s.GetRates(ctx, fromAsset, toAsset)
 	if err != nil {
 		return nil, err
 	}
 
 	fromAmt, err := decimal.NewFromString(amount)
-	if err != nil || fromAmt.IsZero() {
+	if err != nil {
 		return nil, domain.ErrInvalidAsset
+	}
+	if fromAmt.Sign() <= 0 {
+		return nil, domain.ErrInvalidQuoteAmount
+	}
+	if err := validateAmountLimits(fromAsset, fromAmt); err != nil {
+		return nil, err
 	}
 
 	toAmt := fromAmt.Mul(rateResp.Rate)
@@ -136,16 +150,18 @@ func (s *service) GetQuote(ctx context.Context, fromAsset, toAsset, amount strin
 	}
 
 	q := &Quote{
-		ID:         uuid.New().String(),
-		OrgID:      tenantID,
-		FromAsset:  fromAsset,
-		ToAsset:    toAsset,
-		FromAmount: fromAmt,
-		ToAmount:   toAmt,
-		Rate:       rateResp.Rate,
-		Fee:        feeAmt,
-		ExpiresAt:  time.Now().UTC().Add(quoteTTL),
-		Used:       false,
+		ID:                    uuid.New().String(),
+		OrgID:                 tenantID,
+		FromAsset:             fromAsset,
+		ToAsset:               toAsset,
+		FromAmount:            fromAmt,
+		ToAmount:              toAmt,
+		Rate:                  rateResp.Rate,
+		Fee:                   feeAmt,
+		ExpiresAt:             time.Now().UTC().Add(quoteTTL),
+		Used:                  false,
+		FromRequiresTrustline: AssetRequiresTrustline(fromAsset),
+		ToRequiresTrustline:   AssetRequiresTrustline(toAsset),
 	}
 
 	data, err := json.Marshal(q)
@@ -164,15 +180,18 @@ func (s *service) GetQuote(ctx context.Context, fromAsset, toAsset, amount strin
 }
 
 // ExecuteConversion fetches a quote by ID from Redis, validates it has not expired
-// or been used, atomically marks it used, and records the conversion.
+// or been used, verifies ownership, atomically marks it used, and records the conversion.
 func (s *service) ExecuteConversion(ctx context.Context, walletID, quoteID string) (*domain.Conversion, error) {
-	if _, err := s.walletRepo.GetByID(ctx, walletID); err != nil {
+	w, err := s.walletRepo.GetByID(ctx, walletID)
+	if err != nil {
 		return nil, err
 	}
 
 	result, err := markUsedScript.Run(ctx, s.redis, []string{quoteKeyPrefix + quoteID}).Result()
 	if err != nil {
-		switch err.Error() {
+		// Redis error replies may be prefixed with "ERR " by some clients.
+		msg := strings.TrimPrefix(err.Error(), "ERR ")
+		switch msg {
 		case "QUOTE_EXPIRED":
 			return nil, domain.ErrQuoteExpired
 		case "QUOTE_ALREADY_USED":
@@ -185,6 +204,21 @@ func (s *service) ExecuteConversion(ctx context.Context, walletID, quoteID strin
 	var q Quote
 	if err := json.Unmarshal([]byte(result.(string)), &q); err != nil {
 		return nil, fmt.Errorf("decode quote: %w", err)
+	}
+
+	// Ownership: quote tenant must match wallet tenant.
+	if w.TenantID == nil || q.OrgID != *w.TenantID {
+		return nil, domain.ErrQuoteOwnershipMismatch
+	}
+
+	// Expiry: reject if the quote has already expired server-side.
+	if !q.ExpiresAt.IsZero() && q.ExpiresAt.Before(time.Now().UTC()) {
+		return nil, domain.ErrQuoteExpired
+	}
+
+	// Amount: reject non-positive quote amounts defensively.
+	if q.FromAmount.Sign() <= 0 || q.ToAmount.Sign() <= 0 {
+		return nil, domain.ErrInvalidQuoteAmount
 	}
 
 	conv := &domain.Conversion{
@@ -212,6 +246,11 @@ func (s *service) ExecuteConversion(ctx context.Context, walletID, quoteID strin
 // GetRates returns a rate for the given pair, serving from the Redis cache and
 // falling back to a live provider call on a cache miss.
 func (s *service) GetRates(ctx context.Context, from, to string) (*RateResponse, error) {
+	from, to, err := validateFXPair(from, to)
+	if err != nil {
+		return nil, err
+	}
+
 	if resp, ok := s.rateCache.Get(ctx, from, to); ok {
 		return resp, nil
 	}
@@ -229,24 +268,54 @@ func (s *service) GetRates(ctx context.Context, from, to string) (*RateResponse,
 func (s *service) fetchRate(ctx context.Context, from, to string) (*RateResponse, error) {
 	pairKey := from + "-" + to
 	var selected Provider
-	for _, p := range s.providers {
-		for _, pair := range p.SupportedPairs() {
-			if pair == pairKey {
-				selected = p
+	var startIndex int
+	if cachedResp, ok := s.rateCache.Get(ctx, from, to); ok && cachedResp.Provider != "" {
+		for i, p := range s.providers {
+			if fmt.Sprintf("%T", p) == cachedResp.Provider {
+				startIndex = i
 				break
 			}
 		}
-		if selected != nil {
+	}
+
+	var selectedIndex = -1
+	var midRate decimal.Decimal
+	var err error
+
+	for i := 0; i < len(s.providers); i++ {
+		idx := (startIndex + i) % len(s.providers)
+		p := s.providers[idx]
+		supported := false
+		for _, pair := range p.SupportedPairs() {
+			if pair == pairKey {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			continue
+		}
+
+		midRate, err = p.GetRate(ctx, from, to, "1")
+		if err == nil {
+			selected = p
+			selectedIndex = idx
 			break
 		}
 	}
+
 	if selected == nil {
-		return nil, fmt.Errorf("no provider for pair %s", pairKey)
+		return nil, fmt.Errorf("no provider for pair %s: %w", pairKey, err)
 	}
 
-	midRate, err := selected.GetRate(ctx, from, to, "1")
-	if err != nil {
-		return nil, err
+	// Check if failover occurred: if there was a cached response from a different provider, or startIndex was non-zero and we tried a different provider / failed over.
+	// Actually, if we hit a provider other than the cached one (or if cached provider failed and we fell back), invalidate or reset.
+	// The requirement: "After provider failover, the cache should immediately invalidate stale entries and fetch fresh rates from the new provider."
+	// And "Reset the cache entry timestamp on provider failover events, or invalidate all cached rates when the active provider changes."
+	if cachedResp, ok := s.rateCache.Get(ctx, from, to); ok {
+		if cachedResp.Provider != "" && cachedResp.Provider != fmt.Sprintf("%T", selected) {
+			_ = s.redis.Del(ctx, rateKeyPrefix+from+":"+to).Err()
+		}
 	}
 
 	spreadFactor := decimal.NewFromInt(int64(s.spreadBps)).Div(decimal.NewFromInt(10000))
@@ -264,12 +333,26 @@ func (s *service) fetchRate(ctx context.Context, from, to string) (*RateResponse
 
 func (s *service) registerActivePair(pair string) {
 	s.activePairsMu.Lock()
-	s.activePairs[pair] = struct{}{}
+	s.activePairs[pair] = time.Now()
 	s.activePairsMu.Unlock()
 }
 
-// backgroundRefresh polls all active pairs every 30 seconds and refreshes
-// the Redis rate cache with a 60-second TTL.
+// evictStalePairs removes active pairs that haven't been queried within maxAge,
+// so backgroundRefresh stops polling pairs no one is asking about anymore.
+func (s *service) evictStalePairs(maxAge time.Duration) {
+	cutoff := time.Now().Add(-maxAge)
+	s.activePairsMu.Lock()
+	defer s.activePairsMu.Unlock()
+	for pair, lastQueried := range s.activePairs {
+		if lastQueried.Before(cutoff) {
+			delete(s.activePairs, pair)
+		}
+	}
+}
+
+// backgroundRefresh polls active pairs every 30 seconds and refreshes the
+// Redis rate cache, evicting pairs that haven't been queried recently so the
+// map and the refresh workload don't grow unbounded.
 func (s *service) backgroundRefresh(ctx context.Context) {
 	ticker := time.NewTicker(refreshInterval)
 	defer ticker.Stop()
@@ -278,6 +361,8 @@ func (s *service) backgroundRefresh(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			s.evictStalePairs(activePairMaxIdle)
+
 			s.activePairsMu.RLock()
 			pairs := make([]string, 0, len(s.activePairs))
 			for pair := range s.activePairs {

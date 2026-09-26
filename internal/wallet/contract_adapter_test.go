@@ -298,6 +298,123 @@ func TestContractAddTrustlineIsRejected(t *testing.T) {
 	}
 }
 
+func TestContractExecuteTransferRejectsSubPrecisionAmount(t *testing.T) {
+	repo := newContractRepo()
+	repo.wallets["w-c1"] = &domain.Wallet{
+		ID:          "w-c1",
+		PublicKey:   testOwner,
+		ContractID:  testContractID,
+		CustodyType: domain.CustodyContract,
+	}
+
+	adapter := newContractAdapter(t, repo, &stubSoroban{}, &stubDeployer{})
+
+	// 8 decimal places — should be rejected.
+	_, err := adapter.ExecuteTransfer(
+		context.Background(), "w-c1", testOwner, "USDC", "", decimal.RequireFromString("1.12345678"), "",
+	)
+	if !errors.Is(err, domain.ErrSubPrecisionAmount) {
+		t.Fatalf("expected ErrSubPrecisionAmount for 8 decimal places, got %v", err)
+	}
+}
+
+func TestContractExecuteTransferRejectsZeroAfterTruncation(t *testing.T) {
+	repo := newContractRepo()
+	repo.wallets["w-c1"] = &domain.Wallet{
+		ID:          "w-c1",
+		PublicKey:   testOwner,
+		ContractID:  testContractID,
+		CustodyType: domain.CustodyContract,
+	}
+
+	adapter := newContractAdapter(t, repo, &stubSoroban{}, &stubDeployer{})
+
+	// 0.00000001 has 8 decimal places — sub-precision, would truncate to 0.
+	_, err := adapter.ExecuteTransfer(
+		context.Background(), "w-c1", testOwner, "USDC", "", decimal.RequireFromString("0.00000001"), "",
+	)
+	if !errors.Is(err, domain.ErrSubPrecisionAmount) {
+		t.Fatalf("expected ErrSubPrecisionAmount for sub-stroop amount, got %v", err)
+	}
+}
+
+func TestContractExecuteTransferAcceptsMaxPrecision(t *testing.T) {
+	repo := newContractRepo()
+	repo.wallets["w-c1"] = &domain.Wallet{
+		ID:          "w-c1",
+		PublicKey:   testOwner,
+		ContractID:  testContractID,
+		CustodyType: domain.CustodyContract,
+	}
+
+	soroban := &stubSoroban{}
+	adapter := newContractAdapter(t, repo, soroban, &stubDeployer{})
+
+	// Exactly 7 decimal places — should be accepted.
+	hash, err := adapter.ExecuteTransfer(
+		context.Background(), "w-c1", testOwner, "USDC", "", decimal.RequireFromString("1.1234567"), "",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error for max precision amount: %v", err)
+	}
+	if hash != "contract_tx_hash_abc" {
+		t.Fatalf("expected submitted tx hash, got %s", hash)
+	}
+
+	// Verify the stroops value: 1.1234567 * 10^7 = 11234567.
+	amount, err := stellar.DecodeI128(soroban.lastArgs[2])
+	if err != nil {
+		t.Fatalf("decode amount arg: %v", err)
+	}
+	if amount.Cmp(big.NewInt(11_234_567)) != 0 {
+		t.Fatalf("expected 11234567 stroops, got %s", amount)
+	}
+}
+
+func TestContractExecuteTransferAcceptsLessThanMaxPrecision(t *testing.T) {
+	repo := newContractRepo()
+	repo.wallets["w-c1"] = &domain.Wallet{
+		ID:          "w-c1",
+		PublicKey:   testOwner,
+		ContractID:  testContractID,
+		CustodyType: domain.CustodyContract,
+	}
+
+	soroban := &stubSoroban{}
+	adapter := newContractAdapter(t, repo, soroban, &stubDeployer{})
+
+	// Fewer than 7 decimal places — should be accepted.
+	hash, err := adapter.ExecuteTransfer(
+		context.Background(), "w-c1", testOwner, "USDC", "", decimal.RequireFromString("12.5"), "",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error for 1-decimal amount: %v", err)
+	}
+	if hash != "contract_tx_hash_abc" {
+		t.Fatalf("expected submitted tx hash, got %s", hash)
+	}
+}
+
+func TestContractExecuteTransferRejectsLargeSubPrecisionAmount(t *testing.T) {
+	repo := newContractRepo()
+	repo.wallets["w-c1"] = &domain.Wallet{
+		ID:          "w-c1",
+		PublicKey:   testOwner,
+		ContractID:  testContractID,
+		CustodyType: domain.CustodyContract,
+	}
+
+	adapter := newContractAdapter(t, repo, &stubSoroban{}, &stubDeployer{})
+
+	// Large amount with sub-precision — should be rejected.
+	_, err := adapter.ExecuteTransfer(
+		context.Background(), "w-c1", testOwner, "USDC", "", decimal.RequireFromString("1000.00000001"), "",
+	)
+	if !errors.Is(err, domain.ErrSubPrecisionAmount) {
+		t.Fatalf("expected ErrSubPrecisionAmount for large sub-precision amount, got %v", err)
+	}
+}
+
 // scMap builds the ScMap encoding Soroban uses for a contract struct return.
 func scMap(fields map[string]xdr.ScVal) xdr.ScVal {
 	keys := []string{"limit", "spent_in_window", "remaining", "window_resets_at"}

@@ -83,6 +83,23 @@ func (s *service) validateWebhookURL(ctx context.Context, raw string) error {
 	return nil
 }
 
+// ValidateWebhookURL is a package-level convenience that validates the URL
+// scheme only. Full host resolution requires a service instance; callers
+// needing SSRF protection should use s.validateWebhookURL instead.
+func ValidateWebhookURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnsafeWebhookURL, err)
+	}
+	if !allowedWebhookSchemes[u.Scheme] {
+		return fmt.Errorf("%w: scheme %q is not allowed", ErrUnsafeWebhookURL, u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("%w: missing host", ErrUnsafeWebhookURL)
+	}
+	return nil
+}
+
 // newSafeHTTPClient builds the HTTP client used for webhook deliveries. It
 // pins each connection to a freshly re-validated IP address (preventing
 // DNS-rebinding between the pre-flight check and the actual dial) and

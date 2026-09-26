@@ -9,14 +9,14 @@ import (
 )
 
 type Metrics struct {
-	StartedAt       time.Time `json:"started_at"`
-	TotalRequests   int64     `json:"total_requests"`
-	ActiveRequests  int64     `json:"active_requests"`
-	TotalErrors     int64     `json:"total_errors"`
-	UptimeSeconds   float64   `json:"uptime_seconds"`
-	RequestsByCode  map[int]int64 `json:"requests_by_code"`
-	mu              sync.RWMutex
-	requestsByCode  map[int]*int64
+	StartedAt      time.Time     `json:"started_at"`
+	TotalRequests  int64         `json:"total_requests"`
+	ActiveRequests int64         `json:"active_requests"`
+	TotalErrors    int64         `json:"total_errors"`
+	UptimeSeconds  float64       `json:"uptime_seconds"`
+	RequestsByCode map[int]int64 `json:"requests_by_code"`
+	mu             sync.RWMutex
+	requestsByCode map[int]*int64
 }
 
 var globalMetrics = &Metrics{

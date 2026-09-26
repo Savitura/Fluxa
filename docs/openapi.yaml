@@ -857,6 +857,197 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  # ── Claimable balances ────────────────────────────────────────────────────
+  /v1/claimable-balances:
+    post:
+      operationId: createClaimableBalance
+      summary: "Create a claimable balance"
+      description: |
+        Creates a deferred payment held by the Stellar network until one of its
+        claimants satisfies their predicate. The org's source wallet funds it,
+        unless `sponsor_account` names a Fluxa-custodied wallet, in which case
+        the creation is wrapped in BeginSponsoringFutureReserves /
+        EndSponsoringFutureReserves and the sponsor pays the 0.5 XLM entry
+        reserve.
+
+        The returned `balance_id` is derived from the create operation, so it is
+        available without a second Horizon round trip.
+      tags: ["Claimable balances"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClaimableBalanceRequest"
+            example:
+              asset: "USDC"
+              amount: "250.0000000"
+              source_wallet_id: "3f1c2b8e-9a4d-4d3f-8f4e-2b6c1a9d0e77"
+              sponsor_account: "GBAXPW7YQFAZPJS7WFD3XCP3MHKX4ZR3Z4WQ3L7VQZ4X3Z4WQ3L7VQZ4X"
+              revoke_on_expiry: true
+              claimants:
+                - account: "GCLAIMANTACCOUNT0000000000000000000000000000000000000000"
+                  predicate:
+                    type: "before_absolute_time"
+                    timestamp: 1798761600
+                - account: "GORGACCOUNT000000000000000000000000000000000000000000"
+                  predicate:
+                    type: "after_absolute_time"
+                    timestamp: 1798761600
+      responses:
+        "201":
+          description: "Claimable balance created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateClaimableBalanceResponse"
+        "400":
+          description: |
+            Malformed request, unsupported asset, no claimants, a sponsor Fluxa
+            does not custody, or an invalid claim predicate.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    get:
+      operationId: listClaimableBalances
+      summary: "List claimable balances"
+      description: |
+        Lists the claimable balances created by the org. All filters are
+        optional; an omitted `status` returns every balance.
+      tags: ["Claimable balances"]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: ["pending", "claimed", "revoked", "expired"]
+          description: "Only return balances in this state"
+        - name: asset
+          in: query
+          schema:
+            type: string
+          description: "Only return balances for this asset"
+        - name: claimant
+          in: query
+          schema:
+            type: string
+          description: "Only return balances that include this claimant account"
+        - name: expires_before
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: "Only return balances expiring before this RFC3339 timestamp"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: "List of claimable balances"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  claimable_balances:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ClaimableBalanceResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/claimable-balances/{id}:
+    get:
+      operationId: getClaimableBalance
+      summary: "Get a claimable balance"
+      description: |
+        Returns the stored balance together with its live status from Horizon
+        and whether a claimant could claim right now. `on_chain` is absent when
+        Horizon no longer knows the balance, which is what an already-claimed
+        balance looks like.
+      tags: ["Claimable balances"]
+      parameters:
+        - $ref: "#/components/parameters/ClaimableBalanceID"
+      responses:
+        "200":
+          description: "Claimable balance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveClaimableBalanceResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/claimable-balances/{id}/claim:
+    post:
+      operationId: claimClaimableBalance
+      summary: "Claim a claimable balance"
+      description: |
+        Claims on behalf of a claimant account Fluxa custodies, after checking
+        the claimant's predicate is satisfiable right now. A predicate that does
+        not hold is rejected with 400 `PREDICATE_NOT_SATISFIABLE` and no
+        transaction is submitted.
+
+        `claimant_account` may be omitted when the balance has exactly one
+        Fluxa-custodied claimant.
+      tags: ["Claimable balances"]
+      parameters:
+        - $ref: "#/components/parameters/ClaimableBalanceID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaimClaimableBalanceRequest"
+            example:
+              claimant_account: "GCLAIMANTACCOUNT0000000000000000000000000000000000000000"
+      responses:
+        "200":
+          description: "Balance claimed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaimClaimableBalanceResponse"
+        "400":
+          description: |
+            The claimant's predicate is not currently satisfiable
+            (`PREDICATE_NOT_SATISFIABLE`), the account is not a claimant, or no
+            custodied claimant could be resolved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "The balance has already been claimed, revoked or expired."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   # ── Webhooks ──────────────────────────────────────────────────────────────
   /v1/webhooks:
     post:
@@ -1172,6 +1363,213 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /v1/admin/compliance/reviews:
+    get:
+      operationId: listComplianceReviews
+      summary: "List compliance reviews"
+      description: |
+        Lists transfers held by compliance screening. A held transfer is
+        persisted with status `compliance_hold` and is deliberately not
+        enqueued for settlement until it is approved.
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["pending", "approved", "rejected"]
+          description: "Filter by review status"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: "Compliance reviews"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reviews:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ComplianceReview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/compliance/reviews/{id}:
+    get:
+      operationId: getComplianceReview
+      summary: "Get a compliance review"
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: "Compliance review"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplianceReview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: "Compliance review not found"
+
+  /v1/admin/compliance/reviews/{id}/approve:
+    post:
+      operationId: approveComplianceReview
+      summary: "Approve a held transfer"
+      description: |
+        Releases a held transfer. The transaction is reset to `pending` and
+        then re-enqueued for settlement — in that order, because the
+        settlement engine skips any transaction that is not `pending`.
+
+        Decisions are terminal: approving an already-decided review returns
+        `409 REVIEW_ALREADY_DECIDED`, which is what stops two reviewers from
+        releasing the same payment twice.
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                  description: "Reviewer notes recorded on the audit trail"
+      responses:
+        "200":
+          description: "Review approved and transfer released"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplianceReview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: "Compliance review not found"
+        "409":
+          description: "Review has already been decided"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "REVIEW_ALREADY_DECIDED"
+                  message: "compliance review has already been decided"
+
+  /v1/admin/compliance/reviews/{id}/reject:
+    post:
+      operationId: rejectComplianceReview
+      summary: "Reject a held transfer"
+      description: |
+        Rejects a held transfer. The transaction is marked `failed` and is
+        never enqueued for settlement.
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+      responses:
+        "200":
+          description: "Review rejected"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplianceReview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: "Compliance review not found"
+        "409":
+          description: "Review has already been decided"
+
+  /v1/admin/compliance/sanctions-status:
+    get:
+      operationId: getSanctionsStatus
+      summary: "Get sanctions list status"
+      description: |
+        Reports the state of the in-memory OFAC SDN set and the outcome of the
+        last refresh. `loaded: false` means screening is failing closed and
+        every transfer is being held for review.
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      responses:
+        "200":
+          description: "Sanctions list status"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SanctionsStatus"
+              example:
+                loaded: true
+                entity_count: 17423
+                address_count: 621
+                name_count: 16802
+                updated_at: "2026-01-15T03:00:12Z"
+                last_refresh:
+                  status: "success"
+                  entity_count: 17423
+                  duration_ms: 8412
+                  finished_at: "2026-01-15T03:00:12Z"
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Components
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1223,8 +1621,18 @@ components:
       schema:
         type: string
       description: "Webhook endpoint ID"
+    ClaimableBalanceID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: |
+        Stellar claimable balance ID: the hex-encoded XDR of the balance ID
+        (a 4-byte V0 type discriminant followed by a 32-byte hash).
 
   # ── Reusable Responses ──────────────────────────────────────────────────
+
   responses:
     BadRequest:
       description: "Bad request"
@@ -1277,6 +1685,78 @@ components:
 
   # ── Schemas ─────────────────────────────────────────────────────────────
   schemas:
+    ComplianceReview:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        transaction_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: ["pending", "approved", "rejected"]
+        risk_score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        rules_fired:
+          type: array
+          items:
+            type: string
+            enum:
+              - "sanctions_address_match"
+              - "sanctions_name_match"
+              - "sanctions_name_fuzzy_match"
+              - "velocity_burst"
+              - "structuring"
+              - "round_trip"
+              - "screener_error"
+        reason:
+          type: string
+        reviewed_by:
+          type: string
+          description: "Empty for approvals made with API-key authentication, which carries no user identity."
+        review_notes:
+          type: string
+        reviewed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    SanctionsStatus:
+      type: object
+      properties:
+        loaded:
+          type: boolean
+          description: "False means screening is failing closed and holding every transfer."
+        entity_count:
+          type: integer
+        address_count:
+          type: integer
+        name_count:
+          type: integer
+        updated_at:
+          type: string
+          format: date-time
+        last_refresh:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: ["success", "failed"]
+            entity_count:
+              type: integer
+            duration_ms:
+              type: integer
+            error:
+              type: string
+            finished_at:
+              type: string
+              format: date-time
 
     # ── Error ────────────────────────────────────────────────────────────
     ErrorResponse:
@@ -2051,6 +2531,188 @@ components:
           nullable: true
         total_fees:
           type: string
+
+    # ── Claimable balances ────────────────────────────────────────────────
+    ClaimPredicate:
+      type: object
+      description: |
+        A claim predicate, in Fluxa's declarative form. `unconditional` needs no
+        other field; `before_absolute_time` / `after_absolute_time` use
+        `timestamp` (Unix seconds) and `before_relative_time` uses `seconds`
+        (measured from creation). `not` takes exactly one nested predicate and
+        `and` / `or` take exactly two.
+      required: ["type"]
+      properties:
+        type:
+          type: string
+          enum:
+            - "unconditional"
+            - "before_absolute_time"
+            - "after_absolute_time"
+            - "before_relative_time"
+            - "not"
+            - "and"
+            - "or"
+        timestamp:
+          type: integer
+          format: int64
+          description: "Unix timestamp in seconds (absolute-time predicates)"
+        seconds:
+          type: integer
+          format: int64
+          description: "Offset in seconds (before_relative_time)"
+        predicates:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClaimPredicate"
+          description: "Operands: one for `not`, two for `and`/`or`"
+
+    Claimant:
+      type: object
+      required: ["account"]
+      properties:
+        account:
+          type: string
+          description: "Stellar account allowed to claim"
+        predicate:
+          allOf:
+            - $ref: "#/components/schemas/ClaimPredicate"
+          description: "Omitted means unconditional"
+
+    CreateClaimableBalanceRequest:
+      type: object
+      required: ["asset", "amount", "claimants"]
+      properties:
+        asset:
+          type: string
+          description: "Asset code (XLM, USDC, EURC)"
+        amount:
+          type: string
+          description: "Decimal string, up to 7 decimal places"
+        claimants:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/Claimant"
+        source_wallet_id:
+          type: string
+          description: "Wallet that funds the balance; defaults to the configured source wallet"
+        sponsor_account:
+          type: string
+          description: |
+            Optional sponsor account that pays the entry reserve. Must be a
+            wallet Fluxa custodies, because sponsoring requires its signature.
+        revoke_on_expiry:
+          type: boolean
+          default: false
+          description: "Claim an unclaimed balance back to the org once it expires"
+        expires_at:
+          type: string
+          format: date-time
+          description: |
+            Explicit expiry. When omitted it is derived from the earliest
+            absolute deadline in the claimants' predicates.
+
+    CreateClaimableBalanceResponse:
+      type: object
+      properties:
+        balance_id:
+          type: string
+          description: "Stellar claimable balance ID"
+        reserve_required:
+          type: string
+          description: "XLM the entry locks up (0.5, paid by the sponsor when sponsored)"
+        sponsored:
+          type: boolean
+        tx_hash:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ClaimableBalanceResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "Stellar claimable balance ID"
+        asset:
+          type: string
+        amount:
+          type: string
+        claimants:
+          type: array
+          items:
+            $ref: "#/components/schemas/Claimant"
+        sponsor:
+          type: string
+        status:
+          type: string
+          enum: ["pending", "claimed", "revoked", "expired"]
+        revoke_on_expiry:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        claimed_at:
+          type: string
+          format: date-time
+          nullable: true
+        claimed_by:
+          type: string
+
+    LiveClaimableBalanceResponse:
+      allOf:
+        - $ref: "#/components/schemas/ClaimableBalanceResponse"
+        - type: object
+          properties:
+            claimable:
+              type: boolean
+              description: "Whether a claimant could claim right now"
+            on_chain:
+              type: object
+              nullable: true
+              description: "Horizon's view of the balance; absent once it is consumed"
+              properties:
+                id:
+                  type: string
+                asset:
+                  type: string
+                amount:
+                  type: string
+                sponsor:
+                  type: string
+                last_modified_ledger:
+                  type: integer
+
+    ClaimClaimableBalanceRequest:
+      type: object
+      properties:
+        claimant_account:
+          type: string
+          description: |
+            Claimant to claim for. Required unless the balance has exactly one
+            Fluxa-custodied claimant.
+
+    ClaimClaimableBalanceResponse:
+      type: object
+      properties:
+        balance_id:
+          type: string
+        claimed_by:
+          type: string
+        amount:
+          type: string
+        tx_hash:
+          type: string
+        status:
+          type: string
+          enum: ["claimed"]
 
     # ── Usage ─────────────────────────────────────────────────────────────
     UsageResponse:

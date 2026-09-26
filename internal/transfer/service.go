@@ -17,8 +17,36 @@ import (
 	horizonclient "github.com/stellar/go/clients/horizonclient"
 )
 
+var ErrTransferFinal = errors.New("transfer already final")
+
 type TenantGetter interface {
 	GetByID(ctx context.Context, id string) (*domain.Tenant, error)
+}
+
+// Screener is the narrow view of internal/compliance this service needs.
+// It is declared here, and exchanges only domain types, so the transfer
+// package does not depend on the compliance package.
+type Screener interface {
+	ScreenTransfer(ctx context.Context, req domain.ScreeningRequest) (*domain.ScreeningDecision, error)
+	RecordHold(ctx context.Context, tx *domain.Transaction, decision *domain.ScreeningDecision) error
+}
+
+type AuditEntry struct {
+	Actor     string
+	Action    string
+	Resource  string
+	Timestamp time.Time
+}
+
+type AuditLogger interface {
+	Record(ctx context.Context, entry AuditEntry) error
+}
+
+type ReconcileResult struct {
+	WalletID string
+	Expected decimal.Decimal
+	Actual   decimal.Decimal
+	Drift    decimal.Decimal
 }
 
 type Service interface {
@@ -34,6 +62,13 @@ type Service interface {
 	GetTransaction(ctx context.Context, id string) (*domain.Transaction, error)
 	ListTransactions(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error)
 	WithStellarClient(stellarClient stellar.Client) Service
+	// WithScreener enables compliance screening. It is optional so the
+	// worker's screener-less wiring still compiles; when unset, transfers
+	// are not screened.
+	WithScreener(screener Screener) Service
+	ForceSettleTransfer(ctx context.Context, id, actor string) (*domain.Transaction, error)
+	ReconcileWallet(ctx context.Context, walletID, actor string) (*ReconcileResult, error)
+	WithAuditLogger(audit AuditLogger) Service
 }
 
 type service struct {
@@ -43,6 +78,8 @@ type service struct {
 	queue      *queue.Client
 	tenantRepo TenantGetter
 	stellar    stellar.Client
+	screener   Screener
+	audit      AuditLogger
 }
 
 func NewService(repo Repository, walletRepo walletpkg.Repository, feeSvc fees.Service, q *queue.Client, tenantRepo ...TenantGetter) Service {
@@ -55,6 +92,16 @@ func NewService(repo Repository, walletRepo walletpkg.Repository, feeSvc fees.Se
 
 func (s *service) WithStellarClient(stellarClient stellar.Client) Service {
 	s.stellar = stellarClient
+	return s
+}
+
+func (s *service) WithScreener(screener Screener) Service {
+	s.screener = screener
+	return s
+}
+
+func (s *service) WithAuditLogger(audit AuditLogger) Service {
+	s.audit = audit
 	return s
 }
 
@@ -83,17 +130,11 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 	}
 
 	tenantID := tenant.IDFromContext(ctx)
+	var monthlyLimit int
 	if tenantID != "" && s.tenantRepo != nil {
 		t, err := s.tenantRepo.GetByID(ctx, tenantID)
 		if err == nil && t != nil {
-			limit := t.GetTransferLimit()
-			if limit > 0 {
-				now := time.Now().UTC()
-				count, err := s.repo.CountMonthlyTransfersByTenant(ctx, tenantID, now.Year(), now.Month())
-				if err == nil && count >= limit {
-					return nil, domain.ErrTransferLimitReached
-				}
-			}
+			monthlyLimit = t.GetTransferLimit()
 		}
 	}
 
@@ -101,7 +142,8 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 	if err != nil {
 		return nil, fmt.Errorf("source wallet: %w", err)
 	}
-	if _, err := s.walletRepo.GetByID(ctx, toID); err != nil {
+	dstWallet, err := s.walletRepo.GetByID(ctx, toID)
+	if err != nil {
 		return nil, fmt.Errorf("destination wallet: %w", err)
 	}
 
@@ -109,6 +151,43 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 	if asset != "XLM" {
 		if err := s.validateTrustline(ctx, fromID, srcWallet.PublicKey, asset); err != nil {
 			return nil, err
+		}
+	}
+
+	// Screening runs here rather than in the handler so that batch transfers
+	// and scheduled payouts, which both funnel through initiate(), are covered
+	// by the same call.
+	status := domain.StatusPending
+	var decision *domain.ScreeningDecision
+	if s.screener != nil {
+		decision, err = s.screener.ScreenTransfer(ctx, domain.ScreeningRequest{
+			OrgID:         tenantID,
+			FromWalletID:  fromID,
+			ToWalletID:    toID,
+			FromPublicKey: srcWallet.PublicKey,
+			ToPublicKey:   dstWallet.PublicKey,
+			Asset:         asset,
+			Amount:        amount,
+		})
+		if err != nil || decision == nil {
+			// Fail closed. A screening failure must never become a pass, so an
+			// unusable result is treated as a hold rather than propagated as a
+			// 500 that a client would simply retry.
+			decision = &domain.ScreeningDecision{
+				Status:     domain.ScreeningHold,
+				RulesFired: []string{"screener_error"},
+				Reason:     "screening could not be completed",
+				RiskScore:  50,
+			}
+		}
+
+		switch decision.Status {
+		case domain.ScreeningBlocked:
+			// No transaction row is written: the compliance_blocks row the
+			// screener already persisted is the record of this attempt.
+			return nil, domain.ErrTransferBlockedSanctions
+		case domain.ScreeningHold:
+			status = domain.StatusComplianceHold
 		}
 	}
 
@@ -130,7 +209,7 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 	tx := &domain.Transaction{
 		ID:             uuid.New().String(),
 		Type:           domain.TypeTransfer,
-		Status:         domain.StatusPending,
+		Status:         status,
 		FromWallet:     fromID,
 		ToWallet:       toID,
 		Asset:          asset,
@@ -144,8 +223,25 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 		IdempotencyKey: idempotencyKey,
 	}
 
-	if err := s.repo.Create(ctx, tx); err != nil {
-		return nil, fmt.Errorf("persist transaction: %w", err)
+	if monthlyLimit > 0 {
+		now := time.Now().UTC()
+		if err := s.repo.CreateWithMonthlyLimit(ctx, tx, tenantID, now.Year(), now.Month(), monthlyLimit); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := s.repo.Create(ctx, tx); err != nil {
+			return nil, fmt.Errorf("persist transaction: %w", err)
+		}
+	}
+
+	if tx.Status == domain.StatusComplianceHold {
+		// Deliberately not enqueued. The transfer stays parked until a
+		// compliance officer approves it, which resets the row to pending and
+		// enqueues it then.
+		if err := s.screener.RecordHold(ctx, tx, decision); err != nil {
+			return nil, fmt.Errorf("record compliance hold: %w", err)
+		}
+		return tx, nil
 	}
 
 	if s.queue != nil {
@@ -209,4 +305,60 @@ func (s *service) ListTransactions(ctx context.Context, walletID string, limit, 
 		limit = 20
 	}
 	return s.repo.ListByWallet(ctx, walletID, limit, offset)
+}
+
+func (s *service) ForceSettleTransfer(ctx context.Context, id, actor string) (*domain.Transaction, error) {
+	tx, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get transaction: %w", err)
+	}
+	if tx.Status == domain.StatusSettled || tx.Status == domain.StatusFailed || tx.Status == domain.StatusReversed {
+		return nil, ErrTransferFinal
+	}
+	if s.queue == nil {
+		return nil, errors.New("settlement queue not configured")
+	}
+	if err := s.queue.EnqueueTransfer(ctx, tx.ID); err != nil {
+		return nil, fmt.Errorf("enqueue force settle: %w", err)
+	}
+	tx, err = s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get updated transaction: %w", err)
+	}
+	s.recordAudit(ctx, actor, "transfer.force_settle", id)
+	return tx, nil
+}
+
+func (s *service) ReconcileWallet(ctx context.Context, walletID, actor string) (*ReconcileResult, error) {
+	if _, err := s.walletRepo.GetByID(ctx, walletID); err != nil {
+		return nil, fmt.Errorf("get wallet: %w", err)
+	}
+	if s.queue == nil {
+		return nil, errors.New("reconcile queue not configured")
+	}
+	type reconcileQueue interface {
+		EnqueueReconcile(ctx context.Context, walletID string) (*ReconcileResult, error)
+	}
+	q, ok := s.queue.(reconcileQueue)
+	if !ok {
+		return nil, errors.New("reconcile queue does not support reconciliation")
+	}
+	result, err := q.EnqueueReconcile(ctx, walletID)
+	if err != nil {
+		return nil, fmt.Errorf("enqueue reconcile: %w", err)
+	}
+	s.recordAudit(ctx, actor, "wallet.reconcile", walletID)
+	return result, nil
+}
+
+func (s *service) recordAudit(ctx context.Context, actor, action, resource string) {
+	if s.audit == nil {
+		return
+	}
+	_ = s.audit.Record(ctx, AuditEntry{
+		Actor:     actor,
+		Action:    action,
+		Resource:  resource,
+		Timestamp: time.Now().UTC(),
+	})
 }

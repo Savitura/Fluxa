@@ -29,6 +29,11 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
+      - name: Build binaries
+        run: |
+          go build -o bin/api ./cmd/api
+          go build -o bin/worker ./cmd/worker
+
       - name: Run tests
         run: go test ./... -race -count=1 -timeout 90s
 
@@ -37,6 +42,60 @@ jobs:
         with:
           version: v1.61
           args: --timeout=5m
+
+  security:
+    name: Security (gosec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Run gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
+          $(go env GOPATH)/bin/gosec ./...
+
+  docker:
+    name: Docker images
+    runs-on: ubuntu-latest
+    needs: go
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.api
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/${{ github.repository }}-api:${{ github.sha }}
+
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.worker
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/${{ github.repository }}-worker:${{ github.sha }}
 
   web:
     name: Web dashboard

@@ -5,15 +5,14 @@ import (
 	"fmt"
 
 	"github.com/fluxa/fluxa/internal/domain"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
 type ConversionRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewConversionRepo(db *pgxpool.Pool) *ConversionRepo {
+func NewConversionRepo(db DB) *ConversionRepo {
 	return &ConversionRepo{db: db}
 }
 

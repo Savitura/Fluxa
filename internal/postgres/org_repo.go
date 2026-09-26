@@ -7,14 +7,13 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type OrgRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewOrgRepo(db *pgxpool.Pool) *OrgRepo {
+func NewOrgRepo(db DB) *OrgRepo {
 	return &OrgRepo{db: db}
 }
 

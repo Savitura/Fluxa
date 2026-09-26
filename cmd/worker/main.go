@@ -9,6 +9,8 @@ import (
 
 	"github.com/fluxa/fluxa/internal/alerting"
 	"github.com/fluxa/fluxa/internal/assets"
+	"github.com/fluxa/fluxa/internal/claimable"
+	"github.com/fluxa/fluxa/internal/compliance"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/indexer"
@@ -24,6 +26,8 @@ import (
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
@@ -35,6 +39,11 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal().Err(err).Msg("load config")
+	}
+
+	if !cfg.WorkerEnabled {
+		log.Info().Msg("worker disabled for this region")
+		return
 	}
 
 	if cfg.Env == "development" {
@@ -65,14 +74,26 @@ func main() {
 		log.Fatal().Err(err).Msg("connect to database")
 	}
 	defer db.Close()
+	var replica *pgxpool.Pool
+	if cfg.ReplicaDatabaseURL != "" {
+		replica, err = postgres.New(ctx, cfg.ReplicaDatabaseURL)
+		if err != nil {
+			log.Warn().Err(err).Msg("connect to read replica; reads will use primary")
+		}
+		if replica != nil {
+			defer replica.Close()
+		}
+	}
+	repoDB := postgres.NewReplicaAwareDB(db, replica)
 
-	walletRepo := postgres.NewWalletRepo(db)
-	txRepo := postgres.NewTransactionRepo(db)
-	feeRepo := postgres.NewFeeRepo(db)
-	webhookRepo := postgres.NewWebhookRepo(db)
-	reconcileRepo := postgres.NewReconcileRepo(db)
-	scheduleRepo := postgres.NewScheduleRepo(db)
-	treasuryRepo := postgres.NewTreasuryRepo(db)
+	walletRepo := postgres.NewWalletRepo(repoDB)
+	txRepo := postgres.NewTransactionRepo(repoDB)
+	feeRepo := postgres.NewFeeRepo(repoDB)
+	webhookRepo := postgres.NewWebhookRepo(repoDB)
+	reconcileRepo := postgres.NewReconcileRepo(repoDB)
+	scheduleRepo := postgres.NewScheduleRepo(repoDB)
+	treasuryRepo := postgres.NewTreasuryRepo(repoDB)
+	complianceRepo := postgres.NewComplianceRepo(repoDB).WithPrimary(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -80,7 +101,10 @@ func main() {
 	feeSvc := fees.NewService(feeRepo)
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
-		cfg.StellarNetwork, cfg.StellarUSDCIssuer, cfg.PlatformFeeWalletPublicKey,
+		cfg.StellarNetwork, map[string]string{
+			"USDC": cfg.StellarUSDCIssuer,
+			"EURC": cfg.StellarEURCIssuer,
+		}, cfg.PlatformFeeWalletPublicKey,
 	)
 	settlementWorker := settlement.NewWorker(engine)
 
@@ -98,7 +122,32 @@ func main() {
 	}()
 
 	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-worker")
-	qClient := queue.NewClient(cfg.RedisURL)
+	asynqOpt, err := queue.AsynqRedisOptions(cfg.RedisURL, cfg.RedisSentinelMasterName, cfg.RedisSentinelAddrs, cfg.RedisSentinelPassword)
+	if err != nil {
+		log.Fatal().Err(err).Msg("configure asynq redis")
+	}
+	qClient := queue.NewClientWithOptions(asynqOpt)
+	defer qClient.Close()
+	redisOpt, err := queue.RedisOptions(cfg.RedisURL, cfg.RedisSentinelMasterName, cfg.RedisSentinelAddrs, cfg.RedisSentinelPassword)
+	if err != nil {
+		log.Fatal().Err(err).Msg("configure redis")
+	}
+	redisClient := redis.NewUniversalClient(redisOpt)
+	defer redisClient.Close()
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			if err := redisClient.Set(ctx, "fluxa:worker:heartbeat", time.Now().UTC().Format(time.RFC3339Nano), 30*time.Second).Err(); err != nil {
+				log.Warn().Err(err).Msg("worker heartbeat failed")
+			}
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	webhookSvc := webhook.NewConfigService(webhookRepo, webhookRepo, qClient)
 	webhookWorker := webhook.NewWorker(webhookSvc)
@@ -110,7 +159,63 @@ func main() {
 	)
 	treasuryWorker := treasury.NewWorker(treasurySvc)
 
+	// Claimable balances need the same signer and Horizon client as settlement:
+	// creating one spends the org's funds and revoking one claims them back.
+	claimableSvc := claimable.NewService(
+		postgres.NewClaimableBalanceRepo(repoDB),
+		stellarClient,
+		stellar.NewClaimableBalanceClient(cfg.StellarHorizonURL),
+		signer,
+		postgres.NewClaimableWalletResolver(walletRepo),
+		webhook.NewDispatcher(webhookRepo),
+		cfg.ClaimableBalanceSourceWalletID,
+		map[string]string{
+			"USDC": cfg.StellarUSDCIssuer,
+			"EURC": cfg.StellarEURCIssuer,
+		},
+	)
+	claimableWorker := claimable.NewWorker(claimableSvc)
+
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, qClient)
+
+	// The worker screens too: scheduled payouts run here and go through
+	// transfer.initiate() exactly like an API-initiated transfer, so leaving
+	// the screener off would let them bypass compliance entirely.
+	var complianceWorker *compliance.Worker
+	if cfg.ComplianceEnabled {
+		sanctionsSet := compliance.NewSanctionsSet()
+		if err := sanctionsSet.LoadFromRepository(ctx, complianceRepo); err != nil {
+			log.Error().Err(err).Msg("compliance: initial sanctions load failed; transfers will be held until it succeeds")
+		}
+		sanctionsSet.StartReloader(ctx, complianceRepo,
+			time.Duration(cfg.ComplianceReloadMinutes)*time.Minute)
+
+		structuringUnit, err := decimal.NewFromString(cfg.ComplianceStructuringUnit)
+		if err != nil {
+			log.Fatal().Err(err).Msg("parse COMPLIANCE_STRUCTURING_UNIT")
+		}
+
+		screener := compliance.NewCompositeScreener(
+			compliance.NewSanctionsScreener(sanctionsSet, cfg.ComplianceFuzzyThreshold),
+			compliance.NewVelocityScreener(complianceRepo, compliance.VelocityConfig{
+				Window:           time.Duration(cfg.ComplianceVelocityWindowMin) * time.Minute,
+				MaxTransfers:     cfg.ComplianceVelocityMax,
+				StructuringUnit:  structuringUnit,
+				RoundTripWindow:  time.Duration(cfg.ComplianceRoundTripMin) * time.Minute,
+				PlatformWalletID: cfg.PlatformWalletID,
+			}),
+		)
+
+		complianceSvc := compliance.NewService(complianceRepo, screener, sanctionsSet, txRepo, qClient, webhookSvc)
+		transferSvc = transferSvc.WithScreener(complianceSvc)
+		complianceWorker = compliance.NewWorker(
+			complianceRepo,
+			compliance.NewHTTPSDNSource(cfg.OFACSDNURL, nil),
+			sanctionsSet,
+			webhookSvc,
+		)
+	}
+
 	scheduleWorker := schedule.NewWorker(scheduleRepo, transferSvc)
 
 	// Use 0 as the balance discrepancy threshold so any deviation is flagged.
@@ -139,9 +244,8 @@ func main() {
 	).WithDriftThreshold(driftThreshold)
 	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 
-	redisOpt, _ := asynq.ParseRedisURI(cfg.RedisURL)
+	srv := asynq.NewServer(asynqOpt, asynq.Config{
 
-	srv := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency: 10,
 		Queues: map[string]int{
 			"critical": 6,
@@ -159,8 +263,12 @@ func main() {
 	mux.HandleFunc(queue.TypeTenantWebhookDeliver, webhookWorker.HandleDeliver)
 	mux.HandleFunc(queue.TypeRunSchedules, scheduleWorker.HandleRunSchedules)
 	mux.HandleFunc(queue.TypeTreasurySweep, treasuryWorker.HandleSweep)
+	mux.HandleFunc(queue.TypeExpireClaimableBalances, claimableWorker.HandleExpiry)
+	if complianceWorker != nil {
+		mux.HandleFunc(queue.TypeRefreshSanctions, complianceWorker.HandleRefreshSanctions)
+	}
 
-	scheduler := asynq.NewScheduler(redisOpt, nil)
+	scheduler := asynq.NewScheduler(asynqOpt, nil)
 
 	syncTask := asynq.NewTask(queue.TypeSyncLedger, nil)
 	if _, err := scheduler.Register("@every 30s", syncTask); err != nil {
@@ -195,6 +303,24 @@ func main() {
 	treasurySweepTask := asynq.NewTask(queue.TypeTreasurySweep, nil, asynq.Queue("low"))
 	if _, err := scheduler.Register("@daily", treasurySweepTask); err != nil {
 		log.Fatal().Err(err).Msg("register treasury sweep scheduler")
+	}
+
+	// The expiry tracker runs every 5 minutes so an unclaimed balance is marked
+	// expired (and, when revoke_on_expiry is set, claimed back to the org)
+	// within 10 minutes of its expires_at.
+	claimableExpiryTask := asynq.NewTask(queue.TypeExpireClaimableBalances, nil)
+	if _, err := scheduler.Register("@every 5m", claimableExpiryTask); err != nil {
+		log.Fatal().Err(err).Msg("register claimable balance expiry scheduler")
+	}
+
+	// The OFAC SDN list is republished on business days; a daily refresh on the
+	// low queue keeps every process's in-memory set current via
+	// sanctions_entities without competing with live settlement.
+	if complianceWorker != nil {
+		sanctionsTask := asynq.NewTask(queue.TypeRefreshSanctions, nil, asynq.Queue("low"))
+		if _, err := scheduler.Register("@daily", sanctionsTask); err != nil {
+			log.Fatal().Err(err).Msg("register sanctions refresh scheduler")
+		}
 	}
 
 	quit := make(chan os.Signal, 1)

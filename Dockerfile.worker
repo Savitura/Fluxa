@@ -1,0 +1,36 @@
+# Fluxa background worker image (cmd/worker).
+# Build:   docker build -f Dockerfile.worker -t fluxa-worker .
+# Compose: docker compose up --build worker
+
+# Build stage
+FROM golang:1.24-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY . .
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o bin/worker ./cmd/worker
+
+# Runtime stage
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata
+
+RUN adduser -D -g '' appuser
+
+WORKDIR /app
+
+COPY --from=builder /app/bin/worker .
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+CMD ["/app/worker"]

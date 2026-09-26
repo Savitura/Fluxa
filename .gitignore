@@ -1,5 +1,8 @@
 # Binaries
 bin/
+# `go build ./cmd/api` / `./cmd/worker` drop these in the repo root
+/api
+/worker
 *.exe
 *.exe~
 *.dll

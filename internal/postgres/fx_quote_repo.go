@@ -6,16 +6,15 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/fx"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // FXQuoteRepo writes FX quote audit records to Postgres.
 // Redis is the live quote store; this table is the immutable audit trail.
 type FXQuoteRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewFXQuoteRepo(db *pgxpool.Pool) *FXQuoteRepo {
+func NewFXQuoteRepo(db DB) *FXQuoteRepo {
 	return &FXQuoteRepo{db: db}
 }
 

@@ -43,9 +43,21 @@ func (s *service) calculateFee(ctx context.Context, tenantID, asset string, amou
 		return nil, err
 	}
 
+	// Look up applicable tiers based on monthly volume
+	volume, _ := s.repo.GetMonthlyVolume(ctx, tenantID)
+	tier := s.repo.GetApplicableTier(ctx, tenantID, volume)
+
 	feeBps := schedule.TransferFeeBps
 	if !isTransfer {
 		feeBps = schedule.ConversionFeeBps
+	}
+
+	if tier != nil {
+		if isTransfer {
+			feeBps = tier.TransferFeeBps
+		} else {
+			feeBps = tier.ConversionFeeBps
+		}
 	}
 
 	fee, net := Calculate(amount, feeBps)

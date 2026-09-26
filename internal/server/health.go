@@ -20,6 +20,33 @@ const (
 
 type DependencyCheck func(context.Context) error
 
+func HorizonDependencyCheck(baseURL string) DependencyCheck {
+	return func(ctx context.Context) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/fee_stats", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("unexpected status %d", resp.StatusCode)
+		}
+		var payload struct {
+			LastLedgerBaseFee int64 `json:"last_ledger_base_fee"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			return err
+		}
+		if payload.LastLedgerBaseFee <= 0 {
+			return fmt.Errorf("last_ledger_base_fee is not positive")
+		}
+		return nil
+	}
+}
+
 func HTTPDependencyCheck(url string) DependencyCheck {
 	return func(ctx context.Context) error {
 		if url == "" {

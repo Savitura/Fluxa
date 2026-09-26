@@ -1,0 +1,1966 @@
+{
+  "info": {
+    "name": "Fluxa API",
+    "description": "Fluxa is a programmable payments API built on the Stellar network. This collection covers all REST endpoints for wallet management, transfers, FX conversion, webhooks, and more.\n\n## Getting started\n\n1. **Import the environment** \u2014 also import `fluxa.postman_environment.json` and select either **Fluxa (testnet)** or **Fluxa (mainnet)**.\n2. **Set variables** \u2014 fill in `{{base_url}}`, `{{api_key}}`, and other required variables in the environment.\n3. **Try the Health endpoint** to confirm connectivity.\n4. Follow the [Quickstart Guide](/docs/quickstart.md) for a full walkthrough.\n\nThe collection-level pre-request script automatically sets `Authorization: Bearer {{api_key}}` on every request.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "api_key",
+      "value": "YOUR_API_KEY_sk_live_replace_with_real_key",
+      "type": "string"
+    },
+    {
+      "key": "wallet_id",
+      "value": "0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d3f",
+      "type": "string"
+    },
+    {
+      "key": "wallet_id_2",
+      "value": "0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d40",
+      "type": "string"
+    },
+    {
+      "key": "transfer_id",
+      "value": "0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d41",
+      "type": "string"
+    },
+    {
+      "key": "webhook_id",
+      "value": "0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d42",
+      "type": "string"
+    },
+    {
+      "key": "key_id",
+      "value": "0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d43",
+      "type": "string"
+    },
+    {
+      "key": "stellar_public_key",
+      "value": "GAIH3YPEXB6HHVH6RIC6LDGAB7G4WMFP7F2F3I4K6Z6Q5V7X5Y5Z5A5B",
+      "type": "string"
+    },
+    {
+      "key": "jwt_token",
+      "value": "eyJhbGciOiJIUzI1NiIs...",
+      "type": "string"
+    },
+    {
+      "key": "review_id",
+      "value": "0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d99",
+      "type": "string"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "// Automatically set Authorization header for every request",
+              "const apiKey = pm.variables.get('api_key');",
+              "if (apiKey && apiKey !== 'YOUR_API_KEY_sk_live_replace_with_real_key') {",
+              "    pm.request.headers.upsert({",
+              "        key: 'Authorization',",
+              "        value: 'Bearer ' + apiKey",
+              "    });",
+              "}",
+              "",
+              "// Add X-Request-ID for tracing",
+              "pm.request.headers.upsert({",
+              "    key: 'X-Request-ID',",
+              "    value: pm.variables.replaceIn('{{$randomUUID}}')",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has status OK', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.status).to.eql('ok');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Health check endpoint. No authentication required."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"status\":\"ok\"}"
+            }
+          ]
+        }
+      ],
+      "description": "System health endpoints."
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register Account",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Response has JWT token', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('token');",
+                  "    pm.expect(json).to.have.property('tenant_id');",
+                  "    pm.collectionVariables.set('jwt_token', json.token);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My Fintech Co\",\n  \"email\": \"dev@myfintech.co\",\n  \"password\": \"secure-password-here\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Register a new account (individual or organization). Returns a JWT for subsequent requests."
+          },
+          "response": [
+            {
+              "name": "Created",
+              "status": "Created",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"token\":\"eyJhbGciOiJIUzI1NiIs...\",\"tenant_id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d3f\"}"
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has JWT token', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('token');",
+                  "    pm.collectionVariables.set('jwt_token', json.token);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"dev@myfintech.co\",\n  \"password\": \"secure-password-here\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Login with email and password to receive a JWT."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"token\":\"eyJhbGciOiJIUzI1NiIs...\"}"
+            }
+          ]
+        }
+      ],
+      "description": "Authentication endpoints \u2014 register an account and get a JWT token."
+    },
+    {
+      "name": "API Keys",
+      "item": [
+        {
+          "name": "Create API Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Response has key and id', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('id');",
+                  "    pm.expect(json).to.have.property('key');",
+                  "    pm.expect(json.key).to.match(/^sk_/);",
+                  "    pm.collectionVariables.set('api_key_raw', json.key);",
+                  "    pm.collectionVariables.set('key_id', json.id);",
+                  "});",
+                  "",
+                  "pm.test('Key is only shown once on creation', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.key).to.match(/^sk_live_/);",
+                  "    pm.expect(json).to.not.have.property('hash');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"My API Key\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/keys",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "keys"
+              ]
+            },
+            "description": "Create a new API key. The raw key (sk_live_...) is returned exactly once. Store it securely."
+          },
+          "response": [
+            {
+              "name": "Created",
+              "status": "Created",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d43\",\"key\":\"YOUR_API_KEY_sk_live_replace_with_real_key\",\"prefix\":\"sk_live_\",\"label\":\"My API Key\",\"created_at\":\"2026-06-22T12:00:00Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "List API Keys",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response is an array', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Keys have prefix but no raw key', function () {",
+                  "    const json = pm.response.json();",
+                  "    if (json.length > 0) {",
+                  "        pm.expect(json[0]).to.have.property('prefix');",
+                  "        pm.expect(json[0]).to.not.have.property('key');",
+                  "    }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/keys",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "keys"
+              ]
+            },
+            "description": "List all API keys for the authenticated tenant. Only prefixes are returned (never the raw key)."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "[{\"id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d43\",\"prefix\":\"sk_live_\",\"label\":\"My API Key\",\"last_used_at\":\"2026-06-22T12:00:00Z\",\"revoked_at\":null,\"created_at\":\"2026-06-22T12:00:00Z\"}]"
+            }
+          ]
+        },
+        {
+          "name": "Revoke API Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 204', function () {",
+                  "    pm.response.to.have.status(204);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/keys/{{key_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "keys",
+                "{{key_id}}"
+              ]
+            },
+            "description": "Revoke an API key. After revocation, the key can no longer be used for authentication."
+          },
+          "response": [
+            {
+              "name": "No Content",
+              "status": "No Content",
+              "code": 204
+            }
+          ]
+        }
+      ],
+      "description": "API key management \u2014 create, list, and revoke API keys for programmatic access."
+    },
+    {
+      "name": "Wallets",
+      "item": [
+        {
+          "name": "Create Wallet",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Response has wallet id and public key', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('id');",
+                  "    pm.expect(json).to.have.property('public_key');",
+                  "    pm.expect(json.public_key).to.match(/^G/);",
+                  "    pm.collectionVariables.set('wallet_id', json.id);",
+                  "    pm.collectionVariables.set('stellar_public_key', json.public_key);",
+                  "});",
+                  "",
+                  "pm.test('Secret key is never exposed', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.not.have.property('secret_key');",
+                  "    pm.expect(json).to.not.have.property('secret');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/wallets",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "wallets"
+              ]
+            },
+            "description": "Create a new Stellar wallet. The secret key is encrypted with AES-256-GCM before storage and is never returned by any API."
+          },
+          "response": [
+            {
+              "name": "Created",
+              "status": "Created",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d3f\",\"public_key\":\"GAIH3YPEXB6HHVH6RIC6LDGAB7G4WMFP7F2F3I4K6Z6Q5V7X5Y5Z5A5B\",\"created_at\":\"2026-06-22T12:00:00Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "Get Wallet",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has wallet fields', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('id');",
+                  "    pm.expect(json).to.have.property('public_key');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/wallets/{{wallet_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "wallets",
+                "{{wallet_id}}"
+              ]
+            },
+            "description": "Get wallet details by ID."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d3f\",\"public_key\":\"GAIH3YPEXB6HHVH6RIC6LDGAB7G4WMFP7F2F3I4K6Z6Q5V7X5Y5Z5A5B\",\"created_at\":\"2026-06-22T12:00:00Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "Get Wallet Balances",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has balances array', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('wallet_id');",
+                  "    pm.expect(json).to.have.property('balances');",
+                  "    pm.expect(json.balances).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Each balance has asset and balance fields', function () {",
+                  "    const json = pm.response.json();",
+                  "    json.balances.forEach(function(b) {",
+                  "        pm.expect(b).to.have.property('asset_code');",
+                  "        pm.expect(b).to.have.property('balance');",
+                  "    });",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/wallets/{{wallet_id}}/balances",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "wallets",
+                "{{wallet_id}}",
+                "balances"
+              ]
+            },
+            "description": "Get live balances from the Stellar Horizon API for all assets held by the wallet."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"wallet_id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d3f\",\"balances\":[{\"asset_code\":\"XLM\",\"balance\":\"100.0000000\"},{\"asset_code\":\"USDC\",\"issuer\":\"GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5\",\"balance\":\"50.0000000\"}]}"
+            }
+          ]
+        },
+        {
+          "name": "Add Trustline",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"asset_code\": \"USDC\",\n  \"issuer\": \"GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/wallets/{{wallet_id}}/trustlines",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "wallets",
+                "{{wallet_id}}",
+                "trustlines"
+              ]
+            },
+            "description": "Add a Stellar trustline for a new asset. Required before receiving a non-native asset like USDC."
+          },
+          "response": [
+            {
+              "name": "Created",
+              "status": "Created",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d44\",\"asset_code\":\"USDC\",\"issuer\":\"GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5\",\"status\":\"added\",\"created_at\":\"2026-06-22T12:00:00Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "Deposit Fiat",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"1000\",\n  \"currency\": \"NGN\",\n  \"email\": \"user@example.com\",\n  \"name\": \"John Doe\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/wallets/{{wallet_id}}/deposit/fiat",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "wallets",
+                "{{wallet_id}}",
+                "deposit",
+                "fiat"
+              ]
+            },
+            "description": "Initiate a fiat deposit via the configured payment provider (e.g., Flutterwave). Returns a payment link."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"payment_link\":\"https://provider.com/pay/REF-123\",\"reference\":\"DEP-0193b0b4\"}"
+            }
+          ]
+        },
+        {
+          "name": "Withdraw Fiat",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"5000\",\n  \"currency\": \"NGN\",\n  \"account_bank\": \"044\",\n  \"account_number\": \"0123456789\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/wallets/{{wallet_id}}/withdraw/fiat",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "wallets",
+                "{{wallet_id}}",
+                "withdraw",
+                "fiat"
+              ]
+            },
+            "description": "Initiate a fiat withdrawal to a local bank account."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"reference\":\"WIT-0193b0b4\",\"status\":\"pending\"}"
+            }
+          ]
+        }
+      ],
+      "description": "Wallet management \u2014 create Stellar wallets, check balances, manage trustlines and fiat on/off ramps."
+    },
+    {
+      "name": "Transfers",
+      "item": [
+        {
+          "name": "Initiate Transfer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 202', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "pm.test('Response is pending transfer', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('id');",
+                  "    pm.expect(json).to.have.property('status', 'pending');",
+                  "    pm.expect(json).to.have.property('amount');",
+                  "    pm.expect(json).to.have.property('fee_amount');",
+                  "    pm.expect(json).to.have.property('net_amount');",
+                  "    pm.collectionVariables.set('transfer_id', json.id);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"from_wallet_id\": \"{{wallet_id}}\",\n  \"to_wallet_id\": \"{{wallet_id_2}}\",\n  \"asset\": \"USDC\",\n  \"amount\": \"10.50\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transfers",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "transfers"
+              ]
+            },
+            "description": "Initiate an async transfer. Returns 202 Accepted immediately. Poll GET /v1/transfers/:id or wait for the transfer.settled webhook for the final status."
+          },
+          "response": [
+            {
+              "name": "Accepted",
+              "status": "Accepted",
+              "code": 202,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d41\",\"tx_hash\":\"\",\"type\":\"transfer\",\"status\":\"pending\",\"from_wallet_id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d3f\",\"to_wallet_id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d40\",\"asset\":\"USDC\",\"amount\":\"10.5000000\",\"fee_amount\":\"0.0300000\",\"net_amount\":\"10.4700000\",\"fee_bps\":30,\"created_at\":\"2026-06-22T12:00:00Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "Get Transfer Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has transfer fields', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('id');",
+                  "    pm.expect(json).to.have.property('status');",
+                  "    pm.expect(['pending','submitted','confirmed','failed']).to.include(json.status);",
+                  "    pm.expect(json).to.have.property('amount');",
+                  "    pm.expect(json).to.have.property('fee_amount');",
+                  "    pm.expect(json).to.have.property('net_amount');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/transfers/{{transfer_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "transfers",
+                "{{transfer_id}}"
+              ]
+            },
+            "description": "Poll the status of an async transfer. Status flow: pending \u2192 submitted \u2192 confirmed | failed."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d41\",\"tx_hash\":\"a1b2c3d4e5f6...\",\"type\":\"transfer\",\"status\":\"confirmed\",\"from_wallet_id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d3f\",\"to_wallet_id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d40\",\"asset\":\"USDC\",\"amount\":\"10.5000000\",\"fee_amount\":\"0.0300000\",\"net_amount\":\"10.4700000\",\"fee_bps\":30,\"created_at\":\"2026-06-22T12:00:00Z\",\"confirmed_at\":\"2026-06-22T12:01:00Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "List Transactions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has transactions array', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('transactions');",
+                  "    pm.expect(json.transactions).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/transactions?wallet_id={{wallet_id}}&limit=20&offset=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "transactions"
+              ],
+              "query": [
+                {
+                  "key": "wallet_id",
+                  "value": "{{wallet_id}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "List transactions for a wallet with pagination."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"transactions\":[{\"id\":\"0193b0b4-...\",\"status\":\"confirmed\",\"amount\":\"10.5000000\",\"asset\":\"USDC\",\"created_at\":\"...\"}]}"
+            }
+          ]
+        }
+      ],
+      "description": "Transfer operations \u2014 initiate async transfers, poll status, and list transaction history."
+    },
+    {
+      "name": "Batch Transfers",
+      "item": [
+        {
+          "name": "Batch Transfer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 202', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "pm.test('Response has results array', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('results');",
+                  "    pm.expect(json.results).to.be.an('array');",
+                  "    pm.expect(json.results.length).to.eql(2);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transfers\": [\n    {\n      \"from_wallet_id\": \"{{wallet_id}}\",\n      \"to_wallet_id\": \"{{wallet_id_2}}\",\n      \"asset\": \"USDC\",\n      \"amount\": \"5.00\"\n    },\n    {\n      \"from_wallet_id\": \"{{wallet_id}}\",\n      \"to_wallet_id\": \"{{wallet_id_2}}\",\n      \"asset\": \"USDC\",\n      \"amount\": \"3.00\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transfers/batch",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "transfers",
+                "batch"
+              ]
+            },
+            "description": "Submit up to 100 transfers in a single request. Each transfer is processed independently."
+          },
+          "response": [
+            {
+              "name": "Accepted",
+              "status": "Accepted",
+              "code": 202,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"results\":[{\"index\":0,\"id\":\"...\",\"status\":\"pending\"},{\"index\":1,\"id\":\"...\",\"status\":\"pending\"}]}"
+            }
+          ]
+        }
+      ],
+      "description": "Batch transfer operations \u2014 submit multiple transfers in a single request."
+    },
+    {
+      "name": "FX",
+      "item": [
+        {
+          "name": "Get FX Quote",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has quote fields', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('source_asset');",
+                  "    pm.expect(json).to.have.property('dest_asset');",
+                  "    pm.expect(json).to.have.property('rate');",
+                  "    pm.expect(json).to.have.property('source_amount');",
+                  "    pm.expect(json).to.have.property('dest_amount');",
+                  "    pm.expect(json).to.have.property('expires_at');",
+                  "    pm.expect(json).to.have.property('fee_bps');",
+                  "});",
+                  "",
+                  "pm.test('Quote is valid for 30 seconds', function () {",
+                  "    const json = pm.response.json();",
+                  "    const expiresAt = new Date(json.expires_at);",
+                  "    const now = new Date();",
+                  "    const diffMs = expiresAt - now;",
+                  "    pm.expect(diffMs).to.be.above(0);",
+                  "    pm.expect(diffMs).to.be.below(31000);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_asset\": \"USDC\",\n  \"dest_asset\": \"NGN\",\n  \"amount\": \"100.00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/fx/quote",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "fx",
+                "quote"
+              ]
+            },
+            "description": "Get a 30-second exchange rate quote. The quote must be used before expires_at or it will be rejected."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"source_asset\":\"USDC\",\"dest_asset\":\"NGN\",\"source_amount\":\"100\",\"dest_amount\":\"150000\",\"fee_amount\":\"0.50\",\"net_amount\":\"99.50\",\"fee_bps\":50,\"rate\":\"1500\",\"expires_at\":\"2026-06-22T12:00:30Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "Execute Conversion",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has conversion fields', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('wallet_id');",
+                  "    pm.expect(json).to.have.property('source_asset');",
+                  "    pm.expect(json).to.have.property('dest_asset');",
+                  "    pm.expect(json).to.have.property('source_amount');",
+                  "    pm.expect(json).to.have.property('dest_amount');",
+                  "    pm.expect(json).to.have.property('rate');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"wallet_id\": \"{{wallet_id}}\",\n  \"source_asset\": \"USDC\",\n  \"dest_asset\": \"NGN\",\n  \"amount\": \"100.00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/fx/convert",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "fx",
+                "convert"
+              ]
+            },
+            "description": "Execute a currency conversion. Gets a fresh quote internally and validates before processing."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"id\":\"conv-uuid\",\"wallet_id\":\"wallet-uuid\",\"source_asset\":\"USDC\",\"dest_asset\":\"NGN\",\"source_amount\":\"0.0666666\",\"dest_amount\":\"100.0000000\",\"rate\":\"1500.0000000\",\"created_at\":\"2026-06-22T12:00:00Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "Get Rates",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has rate info', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('rate');",
+                  "    pm.expect(json).to.have.property('source_asset');",
+                  "    pm.expect(json).to.have.property('dest_asset');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/fx/rates?source_asset=USDC&dest_asset=NGN",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "fx",
+                "rates"
+              ],
+              "query": [
+                {
+                  "key": "source_asset",
+                  "value": "USDC"
+                },
+                {
+                  "key": "dest_asset",
+                  "value": "NGN"
+                }
+              ]
+            },
+            "description": "Get live exchange rates for a currency pair."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"source_asset\":\"USDC\",\"dest_asset\":\"NGN\",\"rate\":\"1500.0000000\",\"updated_at\":\"2026-06-22T12:00:00Z\"}"
+            }
+          ]
+        }
+      ],
+      "description": "Foreign exchange \u2014 get quotes, execute conversions, and view live rates."
+    },
+    {
+      "name": "Webhooks",
+      "item": [
+        {
+          "name": "Register Webhook",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Response has webhook fields', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('id');",
+                  "    pm.expect(json).to.have.property('url');",
+                  "    pm.expect(json).to.have.property('secret');",
+                  "    pm.expect(json).to.have.property('events');",
+                  "    pm.expect(json).to.have.property('active', true);",
+                  "    pm.collectionVariables.set('webhook_id', json.id);",
+                  "    pm.collectionVariables.set('webhook_secret', json.secret);",
+                  "});",
+                  "",
+                  "pm.test('Webhook secret is shown only once', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.secret).to.match(/^[0-9a-f]+$/);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/webhooks/fluxa\",\n  \"events\": [\n    \"transfer.settled\",\n    \"transfer.failed\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/webhooks",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "webhooks"
+              ]
+            },
+            "description": "Register a webhook endpoint to receive event notifications. The secret is returned only once on creation."
+          },
+          "response": [
+            {
+              "name": "Created",
+              "status": "Created",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"id\":\"0193b0b4-1b33-7e9a-bcf6-2e2a0abb6d42\",\"url\":\"https://example.com/webhooks/fluxa\",\"secret\":\"a1b2c3d4e5f67890a1b2c3d4e5f67890\",\"events\":[\"transfer.settled\",\"transfer.failed\"],\"active\":true,\"created_at\":\"2026-06-22T12:00:00Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "List Webhooks",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has endpoints array', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('endpoints');",
+                  "    pm.expect(json.endpoints).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/webhooks",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "webhooks"
+              ]
+            },
+            "description": "List all registered webhook endpoints."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"endpoints\":[{\"id\":\"0193b0b4-...\",\"url\":\"https://example.com/webhooks/fluxa\",\"events\":[\"transfer.settled\",\"transfer.failed\"],\"active\":true,\"created_at\":\"2026-06-22T12:00:00Z\"}]}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Webhook",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 204', function () {",
+                  "    pm.response.to.have.status(204);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/webhooks/{{webhook_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "webhooks",
+                "{{webhook_id}}"
+              ]
+            },
+            "description": "Remove a webhook endpoint. Future events will no longer be delivered."
+          },
+          "response": [
+            {
+              "name": "No Content",
+              "status": "No Content",
+              "code": 204
+            }
+          ]
+        },
+        {
+          "name": "Get Webhook Deliveries",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has deliveries', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('deliveries');",
+                  "    pm.expect(json.deliveries).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/webhooks/{{webhook_id}}/deliveries?limit=20&offset=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "webhooks",
+                "{{webhook_id}}",
+                "deliveries"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "View the delivery log for a webhook endpoint."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"deliveries\":[{\"id\":\"...\",\"endpoint_id\":\"...\",\"event_type\":\"transfer.settled\",\"status\":\"success\",\"response_code\":200,\"attempt_count\":1,\"last_attempt\":\"2026-06-22T12:01:00Z\",\"created_at\":\"2026-06-22T12:01:00Z\"}]}"
+            }
+          ]
+        },
+        {
+          "name": "Fiat Provider Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"event\": \"charge.completed\",\n  \"reference\": \"DEP-0193b0b4\",\n  \"amount\": \"1000\",\n  \"currency\": \"NGN\",\n  \"status\": \"successful\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/webhooks/fiat/{{fiat_provider}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "webhooks",
+                "fiat",
+                "{{fiat_provider}}"
+              ]
+            },
+            "description": "Webhook receiver for fiat provider callbacks (e.g., Flutterwave). The provider name in the URL path determines which rail provider handles the webhook."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"status\":\"ok\"}"
+            }
+          ]
+        }
+      ],
+      "description": "Webhook management \u2014 register endpoints to receive event notifications, view delivery logs, and handle fiat provider callbacks."
+    },
+    {
+      "name": "Usage & Fees",
+      "item": [
+        {
+          "name": "Get Usage",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/usage",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "usage"
+              ]
+            },
+            "description": "Get current period usage: request count, transfer volume, and rate limit info."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"requests\":{\"total\":1500,\"limit\":10000},\"transfers\":{\"volume\":\"50000.0000000\",\"count\":42},\"period_start\":\"2026-06-01T00:00:00Z\",\"period_end\":\"2026-06-30T23:59:59Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "Get Fee Schedule",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has fee fields', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('transfer_fee_bps');",
+                  "    pm.expect(json).to.have.property('conversion_fee_bps');",
+                  "    pm.expect(json).to.have.property('min_fee_amount');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/fees",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "fees"
+              ]
+            },
+            "description": "Get your tenant's fee schedule showing transfer and conversion fees in basis points."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"transfer_fee_bps\":30,\"conversion_fee_bps\":50,\"min_fee_amount\":\"0.0000000\",\"max_fee_amount\":\"100.0000000\",\"asset\":\"*\"}"
+            }
+          ]
+        },
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has status ok', function () {",
+                  "    pm.expect(pm.response.json().status).to.eql('ok');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Health check endpoint. No authentication required."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"status\":\"ok\"}"
+            }
+          ]
+        }
+      ],
+      "description": "Usage statistics, fee schedules, and system health."
+    },
+    {
+      "name": "Compliance (Admin)",
+      "description": "Transaction screening review workflow. Requires an Owner or Admin role. Transfers stopped by screening are persisted with status compliance_hold and are not enqueued for settlement until approved here.",
+      "item": [
+        {
+          "name": "List Compliance Reviews",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has a reviews array', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('reviews');",
+                  "    pm.expect(json.reviews).to.be.an('array');",
+                  "});",
+                  "",
+                  "if (pm.response.json().reviews.length > 0) {",
+                  "    pm.collectionVariables.set('review_id', pm.response.json().reviews[0].id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/compliance/reviews?status=pending&limit=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "compliance",
+                "reviews"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "pending"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "List transfers held by compliance screening. Filter with ?status=pending."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Compliance Review",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has review fields', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('id');",
+                  "    pm.expect(json).to.have.property('transaction_id');",
+                  "    pm.expect(json).to.have.property('rules_fired');",
+                  "    pm.expect(['pending','approved','rejected']).to.include(json.status);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/compliance/reviews/{{review_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "compliance",
+                "reviews",
+                "{{review_id}}"
+              ]
+            },
+            "description": "Fetch a single compliance review, including the rules that fired and the risk score."
+          },
+          "response": []
+        },
+        {
+          "name": "Approve Held Transfer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Review is approved', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.status).to.eql('approved');",
+                  "    pm.expect(json).to.have.property('reviewed_at');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/compliance/reviews/{{review_id}}/approve",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "compliance",
+                "reviews",
+                "{{review_id}}",
+                "approve"
+              ]
+            },
+            "description": "Release a held transfer. The transaction is reset to pending and then re-enqueued for settlement, in that order. Decisions are terminal: a second approval returns 409 REVIEW_ALREADY_DECIDED.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"notes\": \"Reviewed and cleared by compliance analyst.\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reject Held Transfer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Review is rejected', function () {",
+                  "    pm.expect(pm.response.json().status).to.eql('rejected');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/compliance/reviews/{{review_id}}/reject",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "compliance",
+                "reviews",
+                "{{review_id}}",
+                "reject"
+              ]
+            },
+            "description": "Reject a held transfer. The transaction is marked failed and is never settled.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"notes\": \"Confirmed sanctions match.\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Sanctions Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has sanctions list state', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('loaded');",
+                  "    pm.expect(json).to.have.property('entity_count');",
+                  "    pm.expect(json).to.have.property('address_count');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/compliance/sanctions-status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "compliance",
+                "sanctions-status"
+              ]
+            },
+            "description": "Report the state of the in-memory OFAC SDN set and the last refresh. loaded:false means screening is failing closed and holding every transfer."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

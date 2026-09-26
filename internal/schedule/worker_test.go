@@ -7,6 +7,8 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/fluxa/fluxa/internal/stellar"
+	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/hibiken/asynq"
 	"github.com/shopspring/decimal"
 )
@@ -31,6 +33,14 @@ func (f *fakeTransferSvc) InitiateTransferIdempotent(ctx context.Context, fromID
 
 func (f *fakeTransferSvc) InitiateBatchTransfer(_ context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error) {
 	return &domain.Transaction{ID: "tx-1"}, nil
+}
+
+func (f *fakeTransferSvc) WithScreener(_ transfer.Screener) transfer.Service {
+	return f
+}
+
+func (f *fakeTransferSvc) WithStellarClient(_ stellar.Client) transfer.Service {
+	return f
 }
 
 func (f *fakeTransferSvc) GetTransaction(_ context.Context, id string) (*domain.Transaction, error) {
@@ -127,6 +137,50 @@ func TestHandleRunSchedules_DoesNotFireFutureSchedule(t *testing.T) {
 	}
 	if len(transferSvc.calls) != 0 {
 		t.Fatalf("got %d transfer calls, want 0 for a future schedule", len(transferSvc.calls))
+	}
+}
+
+func TestHandleRunSchedules_RecalculatesNilNextRunAtFromFrequency(t *testing.T) {
+	for _, freq := range []domain.ScheduleFrequency{
+		domain.FrequencyDaily,
+		domain.FrequencyWeekly,
+		domain.FrequencyMonthly,
+	} {
+		t.Run(string(freq), func(t *testing.T) {
+			repo := newFakeScheduleRepo()
+			// Legacy schedule entry created before the recurrence system added
+			// `next_run_at`; the timestamp is nil/zero.
+			sch := &domain.Schedule{
+				ID:         "sched-1",
+				FromWallet: "from-1",
+				ToWallet:   "to-1",
+				Asset:      "XLM",
+				Amount:     decimal.NewFromInt(5),
+				Frequency:  freq,
+				Status:     domain.ScheduleStatusActive,
+			}
+			repo.schedules[sch.ID] = sch
+
+			transferSvc := &fakeTransferSvc{}
+			worker := NewWorker(repo, transferSvc)
+
+			// Must not panic on the nil/zero next_run_at.
+			if err := worker.HandleRunSchedules(context.Background(), asynq.NewTask(queue.TypeRunSchedules, nil)); err != nil {
+				t.Fatalf("HandleRunSchedules() error: %v", err)
+			}
+
+			if len(transferSvc.calls) != 1 {
+				t.Fatalf("got %d transfer calls, want 1 for a recalculated legacy schedule", len(transferSvc.calls))
+			}
+
+			got := repo.schedules[sch.ID].NextRunAt
+			if got.IsZero() {
+				t.Fatalf("next_run_at = zero, want a time recalculated from the %s frequency", freq)
+			}
+			if got.Before(time.Now().UTC()) {
+				t.Fatalf("next_run_at = %v, want a future occurrence after recalculating from %s", got, freq)
+			}
+		})
 	}
 }
 

@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     environment:
       POSTGRES_USER: fluxa
       POSTGRES_PASSWORD: password
@@ -28,14 +28,21 @@ services:
       retries: 5
 
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     ports:
       - "3000:3000"
     environment:
       PORT: "3000"
       ENV: development
+      WORKER_ENABLED: ${WORKER_ENABLED:-true}
       DATABASE_URL: postgresql://fluxa:password@postgres:5432/fluxa?sslmode=disable
+      REPLICA_DATABASE_URL: ${REPLICA_DATABASE_URL:-}
       REDIS_URL: redis://redis:6379
+      REDIS_SENTINEL_MASTER_NAME: ${REDIS_SENTINEL_MASTER_NAME:-}
+      REDIS_SENTINEL_ADDRS: ${REDIS_SENTINEL_ADDRS:-}
+      REDIS_SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:-}
       STELLAR_NETWORK: testnet
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
       STELLAR_USDC_ISSUER: ${STELLAR_USDC_ISSUER:-GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5}
@@ -46,8 +53,8 @@ services:
       FLUTTERWAVE_WEBHOOK_HASH: ${FLUTTERWAVE_WEBHOOK_HASH:-mock}
       ALERT_WEBHOOK_URL: ""
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     command: ["./api"]
@@ -57,13 +64,34 @@ services:
       timeout: 5s
       retries: 5
 
+  # One-shot database migration. Runs `api -migrate-only` against a healthy
+  # postgres before the api/worker start, so `docker compose up` always
+  # boots onto the latest schema with no manual `make migrate` step.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://fluxa:password@postgres:5432/fluxa?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["./api", "-migrate-only"]
+
   worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
     environment:
       PORT: "3001"
       ENV: development
+      WORKER_ENABLED: ${WORKER_ENABLED:-true}
       DATABASE_URL: postgresql://fluxa:password@postgres:5432/fluxa?sslmode=disable
+      REPLICA_DATABASE_URL: ${REPLICA_DATABASE_URL:-}
       REDIS_URL: redis://redis:6379
+      REDIS_SENTINEL_MASTER_NAME: ${REDIS_SENTINEL_MASTER_NAME:-}
+      REDIS_SENTINEL_ADDRS: ${REDIS_SENTINEL_ADDRS:-}
+      REDIS_SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:-}
       STELLAR_NETWORK: testnet
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
       STELLAR_USDC_ISSUER: ${STELLAR_USDC_ISSUER:-GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5}
@@ -74,8 +102,8 @@ services:
       FLUTTERWAVE_WEBHOOK_HASH: ${FLUTTERWAVE_WEBHOOK_HASH:-mock}
       ALERT_WEBHOOK_URL: ""
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     command: ["./worker"]

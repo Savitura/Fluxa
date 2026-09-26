@@ -229,6 +229,10 @@ func (a *ContractWalletAdapter) ExecuteTransfer(
 		return "", err
 	}
 
+	if err := validateStellarPrecision(amount); err != nil {
+		return "", err
+	}
+
 	memoArg := stellar.VoidScVal()
 	if memo != "" {
 		memoArg = stellar.StringScVal(memo)
@@ -429,6 +433,17 @@ func (a *ContractWalletAdapter) buildInvocation(w *domain.Wallet, fn string, arg
 // representation Stellar assets use on-chain.
 func toStroops(amount decimal.Decimal) *big.Int {
 	return amount.Shift(7).Truncate(0).BigInt()
+}
+
+// validateStellarPrecision rejects amounts whose decimal representation has
+// more than 7 fractional digits. Stellar assets use 7-decimal fixed-point
+// integers on-chain, so any finer precision would be silently truncated by
+// toStroops — transferring less than requested or rounding to zero.
+func validateStellarPrecision(amount decimal.Decimal) error {
+	if amount.Exponent() < -7 {
+		return domain.ErrSubPrecisionAmount
+	}
+	return nil
 }
 
 func decodeAddressField(v xdr.ScVal, field string) (string, error) {

@@ -14,6 +14,8 @@ import (
 	"github.com/fluxa/fluxa/internal/assets"
 	"github.com/fluxa/fluxa/internal/auth"
 	"github.com/fluxa/fluxa/internal/batch"
+	"github.com/fluxa/fluxa/internal/claimable"
+	"github.com/fluxa/fluxa/internal/compliance"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/fees"
@@ -36,6 +38,7 @@ import (
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -89,43 +92,61 @@ func main() {
 		log.Fatal().Err(err).Msg("connect to database")
 	}
 	defer db.Close()
+	var replica *pgxpool.Pool
+	if cfg.ReplicaDatabaseURL != "" {
+		replica, err = postgres.New(ctx, cfg.ReplicaDatabaseURL)
+		if err != nil {
+			log.Warn().Err(err).Msg("connect to read replica; reads will use primary")
+		}
+		if replica != nil {
+			defer replica.Close()
+		}
+	}
+	repoDB := postgres.NewReplicaAwareDB(db, replica)
 
-	redisOpt, err := redis.ParseURL(cfg.RedisURL)
+	redisOpt, err := queue.RedisOptions(cfg.RedisURL, cfg.RedisSentinelMasterName, cfg.RedisSentinelAddrs, cfg.RedisSentinelPassword)
 	if err != nil {
 		log.Fatal().Err(err).Msg("parse redis url")
 	}
-	redisClient := redis.NewClient(redisOpt)
+	redisClient := redis.NewUniversalClient(redisOpt)
 	defer redisClient.Close()
 
-	tenantRepo := postgres.NewTenantRepo(db)
-	userRepo := postgres.NewUserRepo(db)
-	orgRepo := postgres.NewOrgRepo(db)
+	tenantRepo := postgres.NewTenantRepo(repoDB)
+	userRepo := postgres.NewUserRepo(repoDB)
+	orgRepo := postgres.NewOrgRepo(repoDB)
 
-	walletRepo := postgres.NewWalletRepo(db)
-	txRepo := postgres.NewTransactionRepo(db)
-	convRepo := postgres.NewConversionRepo(db)
-	feeRepo := postgres.NewFeeRepo(db)
-	apiKeyRepo := postgres.NewAPIKeyRepo(db)
-	fiatRepo := postgres.NewFiatRepo(db)
-	webhookRepo := postgres.NewWebhookRepo(db)
-	reconcileRepo := postgres.NewReconcileRepo(db)
-	fxQuoteRepo := postgres.NewFXQuoteRepo(db)
-	batchRepo := postgres.NewBatchRepo(db)
-	scheduleRepo := postgres.NewScheduleRepo(db)
-	anchorRepo := postgres.NewAnchorRepo(db)
-	treasuryRepo := postgres.NewTreasuryRepo(db)
-	idempotencyRepo := postgres.NewIdempotencyRepo(db)
+	walletRepo := postgres.NewWalletRepo(repoDB)
+	txRepo := postgres.NewTransactionRepo(repoDB)
+
+	convRepo := postgres.NewConversionRepo(repoDB)
+	feeRepo := postgres.NewFeeRepo(repoDB)
+	apiKeyRepo := postgres.NewAPIKeyRepo(repoDB)
+	fiatRepo := postgres.NewFiatRepo(repoDB)
+	webhookRepo := postgres.NewWebhookRepository(repoDB)
+	reconcileRepo := postgres.NewReconcileRepo(repoDB)
+	fxQuoteRepo := postgres.NewFXQuoteRepo(repoDB)
+	batchRepo := postgres.NewBatchRepo(repoDB)
+	scheduleRepo := postgres.NewScheduleRepo(repoDB)
+	anchorRepo := postgres.NewAnchorRepo(repoDB)
+	treasuryRepo := postgres.NewTreasuryRepo(repoDB)
+	idempotencyRepo := postgres.NewIdempotencyRepo(repoDB)
+	complianceRepo := postgres.NewComplianceRepo(repoDB).WithPrimary(db)
 	idemMW := idempotency.Middleware(idempotencyRepo)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
 
-	queueClient := queue.NewClient(cfg.RedisURL)
+	asynqOpt, err := queue.AsynqRedisOptions(cfg.RedisURL, cfg.RedisSentinelMasterName, cfg.RedisSentinelAddrs, cfg.RedisSentinelPassword)
+	if err != nil {
+		log.Fatal().Err(err).Msg("configure asynq redis")
+	}
+	queueClient := queue.NewClientWithOptions(asynqOpt)
 	defer queueClient.Close()
 
 	jwtSecretBytes := []byte(cfg.JWTSecret)
 
-	authSvc := auth.NewService(userRepo, tenantRepo, orgRepo, jwtSecretBytes)
+	refreshTokenRepo := postgres.NewRefreshTokenRepo(repoDB)
+	authSvc := auth.NewService(userRepo, tenantRepo, orgRepo, refreshTokenRepo, jwtSecretBytes)
 	orgSvc := org.NewService(orgRepo, userRepo, tenantRepo, jwtSecretBytes)
 
 	feeSvc := fees.NewService(feeRepo)
@@ -134,24 +155,71 @@ func main() {
 		WithIssuers(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer)
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient, tenantRepo).
 		WithStellarClient(stellarClient)
-	webhookSvc := webhook.NewConfigService(webhookRepo, webhookRepo, queueClient, tenantRepo)
+	webhookSvc := webhook.NewService(webhookRepo, redisClient, queueClient, 120)
+
+	// Compliance screening sits in front of settlement, so it is wired before
+	// the services that initiate transfers. When disabled, no screener is
+	// attached and transfers keep their pre-compliance behaviour.
+	var complianceHandler *compliance.Handler
+	if cfg.ComplianceEnabled {
+		sanctionsSet := compliance.NewSanctionsSet()
+
+		// Not fatal, unlike anchorRegistry.Load: screening fails closed, so an
+		// API that boots before the first SDN refresh holds transfers for
+		// review rather than clearing them. Log loudly and carry on.
+		if err := sanctionsSet.LoadFromRepository(ctx, complianceRepo); err != nil {
+			log.Error().Err(err).Msg("compliance: initial sanctions load failed; transfers will be held until it succeeds")
+		}
+		sanctionsSet.StartReloader(ctx, complianceRepo,
+			time.Duration(cfg.ComplianceReloadMinutes)*time.Minute)
+
+		structuringUnit, err := decimal.NewFromString(cfg.ComplianceStructuringUnit)
+		if err != nil {
+			log.Fatal().Err(err).Msg("parse COMPLIANCE_STRUCTURING_UNIT")
+		}
+
+		screener := compliance.NewCompositeScreener(
+			compliance.NewSanctionsScreener(sanctionsSet, cfg.ComplianceFuzzyThreshold),
+			compliance.NewVelocityScreener(complianceRepo, compliance.VelocityConfig{
+				Window:           time.Duration(cfg.ComplianceVelocityWindowMin) * time.Minute,
+				MaxTransfers:     cfg.ComplianceVelocityMax,
+				StructuringUnit:  structuringUnit,
+				RoundTripWindow:  time.Duration(cfg.ComplianceRoundTripMin) * time.Minute,
+				PlatformWalletID: cfg.PlatformWalletID,
+			}),
+		)
+
+		complianceSvc := compliance.NewService(complianceRepo, screener, sanctionsSet, txRepo, queueClient, webhookSvc)
+		complianceHandler = compliance.NewHandler(complianceSvc)
+		transferSvc = transferSvc.WithScreener(complianceSvc)
+	}
+
 	batchSvc := batch.NewService(batchRepo, txRepo, transferSvc)
 	scheduleSvc := schedule.NewService(scheduleRepo, walletRepo)
 
 	issuers := map[string]string{
 		"USDC": cfg.StellarUSDCIssuer,
 		"EURC": cfg.StellarEURCIssuer,
+		"XLM":  "", // native asset — no issuer
 	}
-	horizonProvider := fx.NewHorizonProvider(cfg.StellarHorizonURL, []string{"USDC-EURC", "EURC-USDC"}, issuers)
+	fxPairs := append([]string{"USDC-EURC", "EURC-USDC"}, fx.DefaultXLMFXPairs()...)
+	horizonProvider := fx.NewHorizonProvider(cfg.StellarHorizonURL, fxPairs, issuers)
+	// CoinGecko oracle backs XLM pairs when DEX order-book liquidity is thin.
+	oracleProvider := fx.NewCoinGeckoProvider(fx.DefaultXLMFXPairs())
 	fxSvc := fx.NewService(
 		walletRepo, convRepo, fxQuoteRepo,
 		feeSvc, stellarClient, redisClient,
-		cfg.StellarUSDCIssuer, []fx.Provider{horizonProvider}, cfg.FXSpreadBps,
+		cfg.StellarUSDCIssuer, []fx.Provider{horizonProvider, oracleProvider}, cfg.FXSpreadBps,
 	)
 	walletSvc.WithFXService(fxSvc)
 
+	// fiat.Service drives exactly one rail. Flutterwave is the live provider;
+	// the Yellow Card provider is implemented (internal/fiat/yellowcard) but
+	// not wired, because fiat.NewService takes a single Rail and there is no
+	// per-request provider selection yet.
 	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
-	fiatSvc := fiat.NewService(fiatRepo, fwProvider, fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
+
+	fiatSvc := fiat.NewService(fiatRepo, fiat.NewRailAdapter(fwProvider), fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
 
 	anchorRegistry := anchor.NewRegistry(anchorRepo, nil)
 	if err := anchorRegistry.Load(ctx); err != nil {
@@ -167,7 +235,10 @@ func main() {
 
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
-		cfg.StellarNetwork, cfg.StellarUSDCIssuer, cfg.PlatformFeeWalletPublicKey,
+		cfg.StellarNetwork, map[string]string{
+			"USDC": cfg.StellarUSDCIssuer,
+			"EURC": cfg.StellarEURCIssuer,
+		}, cfg.PlatformFeeWalletPublicKey,
 	)
 	settlementWorker := settlement.NewWorker(engine)
 
@@ -183,11 +254,7 @@ func main() {
 		}
 	}()
 
-	redisOpt2, err := asynq.ParseRedisURI(cfg.RedisURL)
-	if err != nil {
-		log.Fatal().Err(err).Msg("parse redis uri for asynq")
-	}
-	asynqSrv := asynq.NewServer(redisOpt2, asynq.Config{
+	asynqSrv := asynq.NewServer(asynqOpt, asynq.Config{
 		Concurrency: 5,
 		Queues: map[string]int{
 			"critical": 6,
@@ -199,12 +266,14 @@ func main() {
 	asynqMux.HandleFunc(queue.TypeProcessTransfer, settlementWorker.HandleProcessTransfer)
 	asynqMux.HandleFunc(queue.TypeSyncLedger, indexerWorker.HandleSyncLedger)
 
-	go func() {
-		log.Info().Msg("fluxa api: settlement/indexer asynq consumer starting")
-		if err := asynqSrv.Run(asynqMux); err != nil {
-			log.Error().Err(err).Msg("fluxa api: asynq consumer stopped")
-		}
-	}()
+	if cfg.WorkerEnabled {
+		go func() {
+			log.Info().Msg("fluxa api: settlement/indexer asynq consumer starting")
+			if err := asynqSrv.Run(asynqMux); err != nil {
+				log.Error().Err(err).Msg("fluxa api: asynq consumer stopped")
+			}
+		}()
+	}
 
 	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-api")
 	reconcileSvc := reconcile.NewService(
@@ -256,33 +325,52 @@ func main() {
 	anchorHandler := anchor.NewHandler(anchorRegistry)
 	feeHandler := fees.NewHandler(feeSvc)
 	apikeyHandler := apikey.NewHandler(apiKeyRepo)
-	webhookHandler := webhook.NewHandler(webhookSvc)
-	batchHandler := batch.NewHandler(batchSvc).WithIdempotency(idemMW)
+	webhookHandler := webhook.NewHandler(webhookRepo)
+	assetRegistry := assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer)
+	batchHandler := batch.NewHandler(batchSvc).WithIdempotency(idemMW).WithAssetValidator(assetRegistry.IsSupported)
 	scheduleHandler := schedule.NewHandler(scheduleSvc)
 	treasuryHandler := treasury.NewHandler(treasurySvc).WithMutationGate(server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 
-	// Stellar Core is always reported, even when STELLAR_CORE_URL is unset: a
-	// missing Core URL is itself a degraded dependency, and omitting the key
-	// would report a healthy service that cannot settle anything.
-	healthChecks := map[string]server.DependencyCheck{
-		"database": db.Ping,
-		"redis": func(ctx context.Context) error {
-			return redisClient.Ping(ctx).Err()
+	// Claimable balances move real funds in both directions, so the mutating
+	// routes share the Owner/Admin gate used by /v1/keys and the treasury.
+	claimableSvc := claimable.NewService(
+		postgres.NewClaimableBalanceRepo(repoDB),
+		stellarClient,
+		stellar.NewClaimableBalanceClient(cfg.StellarHorizonURL),
+		signer,
+		postgres.NewClaimableWalletResolver(walletRepo),
+		webhook.NewDispatcher(webhookRepo),
+		cfg.ClaimableBalanceSourceWalletID,
+		map[string]string{
+			"USDC": cfg.StellarUSDCIssuer,
+			"EURC": cfg.StellarEURCIssuer,
 		},
-		"stellar":      server.HTTPDependencyCheck(cfg.StellarHorizonURL),
-		"stellar_core": server.StellarCoreDependencyCheck(cfg.StellarCoreURL),
-	}
-	healthMonitor := server.NewHealthMonitor(healthChecks)
-	healthMonitor.Start(ctx)
+	)
+	claimableHandler := claimable.NewHandler(claimableSvc).
+		WithMutationGate(server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 
 	srv := server.New(
 		authHandler, orgHandler, walletHandler, transferHandler, fxHandler, fiatHandler,
 		anchorFiatHandler, anchorHandler,
 		feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo,
-		webhookHandler, batchHandler, scheduleHandler, treasuryHandler, jwtSecretBytes, cfg.Port,
-		healthChecks,
-		server.WithHealthMonitor(healthMonitor),
-		server.WithMiddleware(tracing.HTTPMiddleware),
+		webhookHandler, batchHandler, scheduleHandler, treasuryHandler, claimableHandler,
+		complianceHandler, jwtSecretBytes, cfg.Port,
+		map[string]server.DependencyCheck{
+			"postgres": db.Ping,
+			"replica":  func(ctx context.Context) error { return repoDB.ReplicaAvailable(ctx) },
+			"redis":    func(ctx context.Context) error { return redisClient.Ping(ctx).Err() },
+
+			"horizon": server.HorizonDependencyCheck(cfg.StellarHorizonURL),
+			"worker": func(ctx context.Context) error {
+				if _, err := redisClient.Get(ctx, "fluxa:worker:heartbeat").Result(); err != nil {
+					return err
+				}
+				return nil
+			},
+		},
+
+		orgRepo,
+		cfg.CORSAllowedOrigins,
 	)
 
 	quit := make(chan os.Signal, 1)

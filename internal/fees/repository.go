@@ -12,6 +12,8 @@ type Repository interface {
 	GetSchedule(ctx context.Context, tenantID *string, asset string) (*domain.FeeSchedule, error)
 	RecordCollection(ctx context.Context, collection *domain.FeeCollection) error
 	ListCollected(ctx context.Context, start, end *time.Time) ([]*domain.FeeCollection, error)
+	GetMonthlyVolume(ctx context.Context, tenantID string) (decimal.Decimal, error)
+	GetApplicableTier(ctx context.Context, tenantID string, volume decimal.Decimal) *domain.FeeTier
 }
 
 type TransferFee struct {

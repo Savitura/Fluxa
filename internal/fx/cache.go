@@ -15,11 +15,11 @@ const (
 
 // RateCache is a Redis-backed store for FX rate responses.
 type RateCache struct {
-	redis *redis.Client
+	redis redis.UniversalClient
 }
 
 // NewRateCache creates a RateCache backed by the given Redis client.
-func NewRateCache(r *redis.Client) *RateCache {
+func NewRateCache(r redis.UniversalClient) *RateCache {
 	return &RateCache{redis: r}
 }
 

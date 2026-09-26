@@ -9,15 +9,18 @@ import (
 )
 
 const (
-	TypeProcessTransfer      = "transfer:process"
-	TypeConfirmTx            = "transfer:confirm"
-	TypeSyncLedger           = "indexer:sync"
-	TypeReconcile            = "reconcile:run"
-	TypeBalanceReconcile     = "reconcile:balance"
-	TypeWebhookDeliver       = "webhook:deliver"
-	TypeTenantWebhookDeliver = "webhook:tenant-deliver"
-	TypeRunSchedules         = "schedule:run"
-	TypeTreasurySweep        = "treasury:sweep"
+	TypeProcessTransfer  = "transfer:process"
+	TypeConfirmTx        = "transfer:confirm"
+	TypeSyncLedger       = "indexer:sync"
+	TypeReconcile        = "reconcile:run"
+	TypeBalanceReconcile = "reconcile:balance"
+	TypeWebhookDeliver   = "webhook:deliver"
+	TypeRunSchedules     = "schedule:run"
+	TypeTreasurySweep    = "treasury:sweep"
+	TypeRefreshSanctions = "compliance:sanctions_refresh"
+	// TypeExpireClaimableBalances sweeps claimable balances past their expiry
+	// and revokes the ones flagged revoke_on_expiry.
+	TypeExpireClaimableBalances = "claimable:expire"
 )
 
 type TraceContext struct {

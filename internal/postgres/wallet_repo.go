@@ -8,15 +8,14 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
 type WalletRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewWalletRepo(db *pgxpool.Pool) *WalletRepo {
+func NewWalletRepo(db DB) *WalletRepo {
 	return &WalletRepo{db: db}
 }
 
@@ -35,9 +34,9 @@ func (r *WalletRepo) Create(ctx context.Context, w *domain.Wallet) error {
 		w.TenantID = &tID
 	}
 	_, err := r.db.Exec(ctx,
-		`INSERT INTO wallets (id, public_key, encrypted_secret, tenant_id, created_at, custody_type, contract_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		w.ID, w.PublicKey, w.EncryptedSecret, nullableUUID(w.TenantID), w.CreatedAt, custodyType(w), w.ContractID,
+		`INSERT INTO wallets (id, public_key, encrypted_secret, tenant_id, sync_cursor, created_at, custody_type, contract_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		w.ID, w.PublicKey, w.EncryptedSecret, nullableUUID(w.TenantID), w.SyncCursor, w.CreatedAt, custodyType(w), w.ContractID,
 	)
 	if err != nil {
 		return fmt.Errorf("insert wallet: %w", err)

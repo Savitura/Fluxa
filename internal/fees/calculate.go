@@ -12,7 +12,7 @@ func Calculate(amount decimal.Decimal, feeBps int) (fee, net decimal.Decimal) {
 		return decimal.Zero, amount
 	}
 
-	fee = amount.Mul(decimal.NewFromInt(int64(feeBps))).Div(bpsDivisor).Round(7)
+	fee = amount.Mul(decimal.NewFromInt(int64(feeBps))).Div(bpsDivisor).RoundUp(7)
 	net = amount.Sub(fee)
 	return fee, net
 }

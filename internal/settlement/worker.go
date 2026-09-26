@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/queue"
 	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/hibiken/asynq"
@@ -33,8 +34,22 @@ func (w *Worker) HandleProcessTransfer(ctx context.Context, task *asynq.Task) er
 
 	logger.Info().Str("tx_id", payload.TransactionID).Msg("processing transfer")
 
-	if err := w.engine.SubmitTransfer(ctx, payload.TransactionID); err != nil {
-		logger.Error().Err(err).Str("tx_id", payload.TransactionID).Msg("transfer submission failed")
+	tx, err := w.engine.txRepo.GetByID(ctx, payload.TransactionID)
+	if err != nil {
+		log.Error().Err(err).Str("tx_id", payload.TransactionID).Msg("failed to fetch transaction for settlement check")
+		return err
+	}
+
+	if tx.Status == domain.StatusFailed || tx.Status == domain.StatusReconciliationFailed {
+		log.Warn().Str("tx_id", payload.TransactionID).Str("status", string(tx.Status)).Msg("skipping already-failed transaction")
+		_ = w.engine.txRepo.UpdateStatus(ctx, payload.TransactionID, domain.StatusFailed, tx.TxHash)
+		return nil
+	}
+
+	if err := w.engine.SubmitTransfer(ctx, payload.TransactionID);
+	err != nil {
+		log.Error().Err(err).Str("tx_id", payload.TransactionID).Msg("transfer submission failed")
+		_ = w.engine.txRepo.UpdateStatus(ctx, payload.TransactionID, domain.StatusFailed, "")
 		return err
 	}
 

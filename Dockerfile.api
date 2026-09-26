@@ -1,3 +1,7 @@
+# Fluxa API server image (cmd/api).
+# Build:   docker build -f Dockerfile.api -t fluxa-api .
+# Compose: docker compose up --build api
+
 # Build stage
 FROM golang:1.24-alpine AS builder
 
@@ -6,12 +10,13 @@ RUN apk add --no-cache git ca-certificates
 WORKDIR /app
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o bin/api ./cmd/api
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o bin/worker ./cmd/worker
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o bin/api ./cmd/api
 
 # Runtime stage
 FROM alpine:3.20
@@ -23,7 +28,6 @@ RUN adduser -D -g '' appuser
 WORKDIR /app
 
 COPY --from=builder /app/bin/api .
-COPY --from=builder /app/bin/worker .
 COPY --from=builder /app/db/migrations ./db/migrations
 
 RUN chown -R appuser:appuser /app

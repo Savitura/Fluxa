@@ -8,14 +8,13 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type BatchRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewBatchRepo(db *pgxpool.Pool) *BatchRepo {
+func NewBatchRepo(db DB) *BatchRepo {
 	return &BatchRepo{db: db}
 }
 

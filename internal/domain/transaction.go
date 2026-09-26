@@ -15,6 +15,11 @@ const (
 	StatusConfirmed            TransactionStatus = "confirmed"
 	StatusFailed               TransactionStatus = "failed"
 	StatusReconciliationFailed TransactionStatus = "reconciliation_failed"
+	// StatusComplianceHold marks a transfer that passed validation but was
+	// stopped by screening. It is never enqueued for settlement; an approval
+	// must reset it to StatusPending first, because settlement.Engine
+	// silently no-ops on any status other than pending.
+	StatusComplianceHold TransactionStatus = "compliance_hold"
 
 	TypeTransfer   TransactionType = "transfer"
 	TypeConversion TransactionType = "conversion"
@@ -39,6 +44,15 @@ type Transaction struct {
 	ReconciledAt   *time.Time
 	RequeueCount   int
 	IdempotencyKey string
+
+	// Fiat leg metadata, set only for transfers that settle a deposit or
+	// withdrawal through a fiat rail. All nullable — a pure on-chain
+	// transfer leaves every one of them nil.
+	FiatRail        *string
+	FiatProviderRef *string
+	FiatStatus      *string
+	LocalCurrency   *string
+	LocalAmount     *decimal.Decimal
 }
 
 func (t *Transaction) NetAmount() decimal.Decimal {
