@@ -1,4 +1,4 @@
-CREATE TABLE fx_quotes (
+CREATE TABLE IF NOT EXISTS fx_quotes (
     id            UUID PRIMARY KEY,
     org_id        TEXT NOT NULL DEFAULT '',
     from_asset    TEXT NOT NULL,
@@ -13,6 +13,6 @@ CREATE TABLE fx_quotes (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_fx_quotes_org_id    ON fx_quotes(org_id);
-CREATE INDEX idx_fx_quotes_used      ON fx_quotes(used) WHERE used = false;
-CREATE INDEX idx_fx_quotes_created_at ON fx_quotes(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fx_quotes_org_id    ON fx_quotes(org_id);
+CREATE INDEX IF NOT EXISTS idx_fx_quotes_used      ON fx_quotes(used) WHERE used = false;
+CREATE INDEX IF NOT EXISTS idx_fx_quotes_created_at ON fx_quotes(created_at DESC);

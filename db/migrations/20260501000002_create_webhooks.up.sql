@@ -1,4 +1,4 @@
-CREATE TABLE webhook_endpoints (
+CREATE TABLE IF NOT EXISTS webhook_endpoints (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id   UUID,
     url         TEXT NOT NULL,
@@ -8,11 +8,15 @@ CREATE TABLE webhook_endpoints (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_webhook_endpoints_tenant ON webhook_endpoints(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_webhook_endpoints_tenant ON webhook_endpoints(tenant_id);
 
-CREATE TYPE webhook_delivery_status AS ENUM ('pending', 'success', 'failed');
+DO $$ BEGIN
+    CREATE TYPE webhook_delivery_status AS ENUM ('pending', 'success', 'failed');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TABLE webhook_deliveries (
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     endpoint_id    UUID NOT NULL REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
     event_type     TEXT NOT NULL,
@@ -24,5 +28,5 @@ CREATE TABLE webhook_deliveries (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_webhook_deliveries_endpoint ON webhook_deliveries(endpoint_id);
-CREATE INDEX idx_webhook_deliveries_status   ON webhook_deliveries(status);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_endpoint ON webhook_deliveries(endpoint_id);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status   ON webhook_deliveries(status);

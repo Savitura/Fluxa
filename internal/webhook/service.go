@@ -49,8 +49,11 @@ type Service interface {
 	ListDeadLetters(ctx context.Context, limit int) ([]*domain.WebhookDeadLetter, error)
 	ReplayDeadLetter(ctx context.Context, deadLetterID string) error
 	GetEndpointHealth(ctx context.Context, endpointID string) (*domain.WebhookHealth, error)
-	TriggerEvent(ctx context.Context, eventType string, payload interface{}) error
+	Dispatch(ctx context.Context, eventType string, payload interface{}) error
 	Deliver(ctx context.Context, deliveryID string) error
+	CreateSubscription(ctx context.Context, eventType, webhookURL string) (*domain.WebhookSubscription, error)
+	ListSubscriptions(ctx context.Context) ([]*domain.WebhookSubscription, error)
+	DeleteSubscription(ctx context.Context, id string) error
 }
 
 type service struct {
@@ -72,18 +75,20 @@ var DefaultBackoffSchedule = []time.Duration{
 	6 * time.Hour,
 }
 
-func NewService(repo Repository, rdb redis.UniversalClient, queueClient *queue.Client, maxPerMinute int) Service {
+func NewService(repo Repository, rdb redis.UniversalClient, queueClient *queue.Client, maxPerMinute int, allowPrivateNetworks bool) Service {
 	if maxPerMinute <= 0 {
 		maxPerMinute = 120
 	}
-	return &service{
-		repo:        repo,
-		rdb:         rdb,
-		client:      &http.Client{Timeout: 10 * time.Second},
-		queueClient: queueClient,
-		maxPerMinute: maxPerMinute,
-		maxAttempts:  len(DefaultBackoffSchedule),
+	s := &service{
+		repo:                 repo,
+		rdb:                  rdb,
+		queueClient:          queueClient,
+		maxPerMinute:         maxPerMinute,
+		maxAttempts:          len(DefaultBackoffSchedule),
+		allowPrivateNetworks: allowPrivateNetworks,
 	}
+	s.client = s.newSafeHTTPClient()
+	return s
 }
 
 func generateSecret() string {
@@ -93,7 +98,7 @@ func generateSecret() string {
 }
 
 func (s *service) RegisterEndpoint(ctx context.Context, url string, events []string) (*domain.WebhookEndpoint, string, error) {
-	if err := ValidateWebhookURL(url); err != nil {
+	if err := s.validateWebhookURL(ctx, url); err != nil {
 		return nil, "", err
 	}
 
@@ -141,6 +146,36 @@ func (s *service) DeleteEndpoint(ctx context.Context, id string) error {
 	return s.repo.DeleteEndpoint(ctx, id)
 }
 
+func (s *service) CreateSubscription(ctx context.Context, eventType, webhookURL string) (*domain.WebhookSubscription, error) {
+	if err := s.validateWebhookURL(ctx, webhookURL); err != nil {
+		return nil, err
+	}
+
+	sub := &domain.WebhookSubscription{
+		ID:         uuid.New().String(),
+		EventType:  eventType,
+		WebhookURL: webhookURL,
+	}
+
+	if err := s.repo.CreateSubscription(ctx, sub); err != nil {
+		return nil, err
+	}
+	return sub, nil
+}
+
+func (s *service) ListSubscriptions(ctx context.Context) ([]*domain.WebhookSubscription, error) {
+	tid := tenant.IDFromContext(ctx)
+	var tenantPtr *string
+	if tid != "" {
+		tenantPtr = &tid
+	}
+	return s.repo.ListSubscriptions(ctx, tenantPtr)
+}
+
+func (s *service) DeleteSubscription(ctx context.Context, id string) error {
+	return s.repo.DeleteSubscription(ctx, id)
+}
+
 func (s *service) ListDeliveries(ctx context.Context, endpointID string, limit int) ([]*domain.WebhookDelivery, error) {
 	if limit <= 0 {
 		limit = 50
@@ -185,7 +220,7 @@ func (s *service) ReplayDeadLetter(ctx context.Context, deadLetterID string) err
 	}
 
 	if s.queueClient != nil {
-		_, err = s.queueClient.EnqueueWebhookDeliveryy(ctx, newDel.ID)
+		_, err = s.queueClient.EnqueueWebhookDelivery(ctx, newDel.ID)
 		return err
 	}
 	return nil
@@ -206,7 +241,7 @@ func (s *service) GetEndpointHealth(ctx context.Context, endpointID string) (*do
 	}, nil
 }
 
-func (s *service) TriggerEvent(ctx context.Context, eventType string, payload interface{}) error {
+func (s *service) Dispatch(ctx context.Context, eventType string, payload interface{}) error {
 	bytesPayload, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -311,9 +346,12 @@ func (s *service) Deliver(ctx context.Context, deliveryID string) error {
 	now := time.Now().UTC()
 	deliv.LastAttempt = &now
 
-	hash := hmac.New(sha256.New, []byte(ep.Secret))
-	hash.Write([]byte(deliv.Payload))
-	sig := hex.EncodeToString(hash.Sum(nil))
+	timestamp := fmt.Sprintf("%d", now.Unix())
+	sig := sign(ep.Secret, timestamp, []byte(deliv.Payload))
+
+	if err := s.validateWebhookURL(ctx, ep.URL); err != nil {
+		return s.handleDeliveryFailure(ctx, deliv, ep, err.Error(), nil, nil)
+	}
 
 	method := deliv.Method
 	if method == "" {
@@ -324,8 +362,8 @@ func (s *service) Deliver(ctx context.Context, deliveryID string) error {
 		return s.handleDeliveryFailure(ctx, deliv, ep, err.Error(), nil, nil)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Fluxa-Signature", "sha256="+sig)
-	req.Header.Set("X-Fluxa-Timestamp", fmt.Sprintf("%d", now.Unix()))
+	req.Header.Set("X-Fluxa-Signature", sig)
+	req.Header.Set("X-Fluxa-Timestamp", timestamp)
 
 	resp, err := s.client.Do(req)
 	if err != nil {

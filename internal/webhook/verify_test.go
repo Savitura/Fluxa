@@ -1,6 +1,8 @@
 package webhook
 
 import (
+	"encoding/json"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -114,5 +116,53 @@ func TestVerify_TamperedBodyRejected(t *testing.T) {
 	}
 	if result.Reason != "signature_mismatch" {
 		t.Fatalf("reason = %q, want signature_mismatch", result.Reason)
+	}
+}
+
+func TestVerify_TestVectors(t *testing.T) {
+	data, err := os.ReadFile("../../docs/webhook-verification/test-vectors.json")
+	if err != nil {
+		t.Fatalf("failed to read test vectors: %v", err)
+	}
+
+	var payload struct {
+		ReferenceNow     int64 `json:"referenceNow"`
+		ToleranceSeconds int64 `json:"toleranceSeconds"`
+		Vectors          []struct {
+			Name              string `json:"name"`
+			Secret            string `json:"secret"`
+			Timestamp         string `json:"timestamp"`
+			Body              string `json:"body"`
+			ExpectedSignature string `json:"expectedSignature"`
+			ExpectStale       bool   `json:"expectStale"`
+		} `json:"vectors"`
+	}
+
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("failed to unmarshal test vectors: %v", err)
+	}
+
+	origNow := nowFunc
+	defer func() { nowFunc = origNow }()
+	nowFunc = func() time.Time {
+		return time.Unix(payload.ReferenceNow, 0)
+	}
+
+	for _, v := range payload.Vectors {
+		t.Run(v.Name, func(t *testing.T) {
+			res := Verify(v.Secret, v.Timestamp, v.Body, v.ExpectedSignature)
+			if v.ExpectStale {
+				if res.Valid {
+					t.Fatal("expected stale timestamp, got valid")
+				}
+				if res.Reason != "stale_timestamp" {
+					t.Fatalf("expected reason stale_timestamp, got %q", res.Reason)
+				}
+			} else {
+				if !res.Valid {
+					t.Fatalf("expected valid signature, got invalid (reason: %q)", res.Reason)
+				}
+			}
+		})
 	}
 }

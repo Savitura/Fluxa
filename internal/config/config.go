@@ -53,6 +53,7 @@ type Config struct {
 	ComplianceFuzzyThreshold    int
 	ComplianceReloadMinutes     int
 	WorkerEnabled               bool
+	WebhookAllowPrivateNetworks bool
 	// ClaimableBalanceSourceWalletID funds claimable balances whose request did
 	// not name a source wallet.
 	ClaimableBalanceSourceWalletID string
@@ -94,6 +95,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("COMPLIANCE_FUZZY_THRESHOLD", "2")
 	viper.SetDefault("COMPLIANCE_RELOAD_MINUTES", "15")
 	viper.SetDefault("WORKER_ENABLED", "true")
+	viper.SetDefault("WEBHOOK_ALLOW_PRIVATE_NETWORKS", "false")
 
 	viper.SetConfigFile(".env")
 	viper.SetConfigType("env")
@@ -126,6 +128,11 @@ func Load() (*Config, error) {
 	ycSandbox, _ := strconv.ParseBool(viper.GetString("YELLOW_CARD_SANDBOX"))
 	complianceEnabled, _ := strconv.ParseBool(viper.GetString("COMPLIANCE_ENABLED"))
 	workerEnabled, _ := strconv.ParseBool(viper.GetString("WORKER_ENABLED"))
+	webhookAllowPrivateNetworks, _ := strconv.ParseBool(viper.GetString("WEBHOOK_ALLOW_PRIVATE_NETWORKS"))
+
+	if webhookAllowPrivateNetworks && env != "development" {
+		return nil, fmt.Errorf("WEBHOOK_ALLOW_PRIVATE_NETWORKS can only be enabled in development environment")
+	}
 
 	return &Config{
 		Port:                        viper.GetString("PORT"),
@@ -171,6 +178,7 @@ func Load() (*Config, error) {
 		ComplianceFuzzyThreshold:    viper.GetInt("COMPLIANCE_FUZZY_THRESHOLD"),
 		ComplianceReloadMinutes:     viper.GetInt("COMPLIANCE_RELOAD_MINUTES"),
 		WorkerEnabled:               workerEnabled,
+		WebhookAllowPrivateNetworks: webhookAllowPrivateNetworks,
 
 		ClaimableBalanceSourceWalletID: viper.GetString("CLAIMABLE_BALANCE_SOURCE_WALLET_ID"),
 	}, nil

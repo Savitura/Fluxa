@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -18,11 +19,11 @@ import (
 )
 
 type Handler struct {
-	repo Repository
+	svc Service
 }
 
-func NewHandler(repo Repository) *Handler {
-	return &Handler{repo: repo}
+func NewHandler(svc Service) *Handler {
+	return &Handler{svc: svc}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
@@ -42,12 +43,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 }
 
 func (h *Handler) ListEndpoints(w http.ResponseWriter, r *http.Request) {
-	tID := tenant.IDFromContext(r.Context())
-	var tIDPtr *string
-	if tID != "" {
-		tIDPtr = &tID
-	}
-	eps, err := h.repo.ListEndpoints(r.Context(), tIDPtr)
+	eps, err := h.svc.ListEndpoints(r.Context())
 	if err != nil {
 		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
@@ -65,21 +61,12 @@ func (h *Handler) RegisterEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tID := tenant.IDFromContext(r.Context())
-	var tIDPtr *string
-	if tID != "" {
-		tIDPtr = &tID
-	}
-
-	ep := &domain.WebhookEndpoint{
-		ID:       uuid.New().String(),
-		TenantID: tIDPtr,
-		URL:      req.URL,
-		Events:   req.Events,
-		Active:   true,
-	}
-
-	if err := h.repo.CreateEndpoint(r.Context(), ep); err != nil {
+	ep, _, err := h.svc.RegisterEndpoint(r.Context(), req.URL, req.Events)
+	if err != nil {
+		if errors.Is(err, ErrUnsafeWebhookURL) {
+			api.Error(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
 		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
@@ -88,7 +75,7 @@ func (h *Handler) RegisterEndpoint(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) DeleteEndpoint(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := h.repo.DeleteEndpoint(r.Context(), id); err != nil {
+	if err := h.svc.DeleteEndpoint(r.Context(), id); err != nil {
 		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
@@ -104,7 +91,7 @@ func (h *Handler) ListDeliveries(w http.ResponseWriter, r *http.Request) {
 			limit = l
 		}
 	}
-	deliveries, err := h.repo.ListDeliveries(r.Context(), id, limit, 0)
+	deliveries, err := h.svc.ListDeliveries(r.Context(), id, limit)
 	if err != nil {
 		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
@@ -136,12 +123,7 @@ func (h *Handler) VerifySignature(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListSubscriptions(w http.ResponseWriter, r *http.Request) {
-	tID := tenant.IDFromContext(r.Context())
-	var tIDPtr *string
-	if tID != "" {
-		tIDPtr = &tID
-	}
-	subs, err := h.repo.ListSubscriptions(r.Context(), tIDPtr)
+	subs, err := h.svc.ListSubscriptions(r.Context())
 	if err != nil {
 		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
@@ -159,13 +141,12 @@ func (h *Handler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sub := &domain.WebhookSubscription{
-		ID:         uuid.New().String(),
-		EventType:  req.EventType,
-		WebhookURL: req.WebhookURL,
-	}
-
-	if err := h.repo.CreateSubscription(r.Context(), sub); err != nil {
+	sub, err := h.svc.CreateSubscription(r.Context(), req.EventType, req.WebhookURL)
+	if err != nil {
+		if errors.Is(err, ErrUnsafeWebhookURL) {
+			api.Error(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
 		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
@@ -174,7 +155,7 @@ func (h *Handler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) DeleteSubscription(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := h.repo.DeleteSubscription(r.Context(), id); err != nil {
+	if err := h.svc.DeleteSubscription(r.Context(), id); err != nil {
 		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
