@@ -125,11 +125,17 @@ func (m *mockWebhookSvc) DeleteEndpoint(_ context.Context, _ string) error {
 func (m *mockWebhookSvc) ListDeliveries(_ context.Context, _ string, _ int) ([]*domain.WebhookDelivery, error) {
 	return nil, nil
 }
-func (m *mockWebhookSvc) ListDeadLetters(_ context.Context, _ int) ([]*domain.WebhookDeadLetter, error) {
+func (m *mockWebhookSvc) ListDeadLetters(_ context.Context, _ domain.DeadLetterFilter, _, _ int) ([]*domain.WebhookDeadLetter, error) {
 	return nil, nil
 }
-func (m *mockWebhookSvc) ReplayDeadLetter(_ context.Context, _ string) error {
-	return nil
+func (m *mockWebhookSvc) GetDeadLetter(_ context.Context, _ string) (*domain.WebhookDeadLetter, error) {
+	return nil, nil
+}
+func (m *mockWebhookSvc) ReplayDeadLetter(_ context.Context, _ string) (*domain.WebhookDeadLetter, error) {
+	return nil, nil
+}
+func (m *mockWebhookSvc) PruneDeadLetters(_ context.Context, _ time.Duration) (int64, error) {
+	return 0, nil
 }
 func (m *mockWebhookSvc) GetEndpointHealth(_ context.Context, _ string) (*domain.WebhookHealth, error) {
 	return nil, nil

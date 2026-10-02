@@ -4,16 +4,21 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
 )
 
 type fakeRepo struct {
+	mu            sync.Mutex
 	endpoints     map[string]*domain.WebhookEndpoint
 	deliveries    map[string]*domain.WebhookDelivery
 	deadLetters   map[string]*domain.WebhookDeadLetter
+	attempts      map[string][]*domain.WebhookDeliveryAttempt
 	subscriptions map[string]*domain.WebhookSubscription
 }
 
@@ -22,6 +27,7 @@ func newFakeRepo() *fakeRepo {
 		endpoints:     make(map[string]*domain.WebhookEndpoint),
 		deliveries:    make(map[string]*domain.WebhookDelivery),
 		deadLetters:   make(map[string]*domain.WebhookDeadLetter),
+		attempts:      make(map[string][]*domain.WebhookDeliveryAttempt),
 		subscriptions: make(map[string]*domain.WebhookSubscription),
 	}
 }
@@ -90,20 +96,113 @@ func (f *fakeRepo) CreateDeadLetter(_ context.Context, dl *domain.WebhookDeadLet
 	return nil
 }
 
+// cloneDeadLetter mirrors the production repository, which returns a fresh
+// row per read. Returning the stored pointer would let a read-path redaction
+// mutate the retained payload and corrupt a later replay.
+func cloneDeadLetter(dl *domain.WebhookDeadLetter) *domain.WebhookDeadLetter {
+	copy := *dl
+	copy.RedactedFields = append([]string(nil), dl.RedactedFields...)
+	return &copy
+}
+
 func (f *fakeRepo) GetDeadLetter(_ context.Context, id string) (*domain.WebhookDeadLetter, error) {
 	dl, ok := f.deadLetters[id]
 	if !ok {
-		return nil, http.ErrMissingBoundary
+		return nil, domain.ErrDeadLetterNotFound
 	}
-	return dl, nil
+	return cloneDeadLetter(dl), nil
 }
 
-func (f *fakeRepo) ListDeadLetters(_ context.Context, tenantID *string, limit, offset int) ([]*domain.WebhookDeadLetter, error) {
-	var res []*domain.WebhookDeadLetter
+func (f *fakeRepo) GetDeadLetterForTenant(_ context.Context, id, tenantID string) (*domain.WebhookDeadLetter, error) {
+	dl, ok := f.deadLetters[id]
+	if !ok || dl.TenantID == nil || *dl.TenantID != tenantID {
+		return nil, domain.ErrDeadLetterNotFound
+	}
+	return cloneDeadLetter(dl), nil
+}
+
+func (f *fakeRepo) ListDeadLetters(_ context.Context, filter domain.DeadLetterFilter, limit, offset int) ([]*domain.WebhookDeadLetter, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	res := make([]*domain.WebhookDeadLetter, 0)
 	for _, dl := range f.deadLetters {
-		res = append(res, dl)
+		if filter.TenantID != "" && (dl.TenantID == nil || *dl.TenantID != filter.TenantID) {
+			continue
+		}
+		if filter.EndpointID != "" && dl.EndpointID != filter.EndpointID {
+			continue
+		}
+		if filter.EventType != "" && dl.EventType != filter.EventType {
+			continue
+		}
+		if filter.Status != "" && dl.Status != filter.Status {
+			continue
+		}
+		if filter.Since != nil && dl.CreatedAt.Before(*filter.Since) {
+			continue
+		}
+		if filter.Until != nil && dl.CreatedAt.After(*filter.Until) {
+			continue
+		}
+		res = append(res, cloneDeadLetter(dl))
+	}
+	sort.Slice(res, func(i, j int) bool { return res[i].CreatedAt.After(res[j].CreatedAt) })
+	if offset > len(res) {
+		return res[:0], nil
+	}
+	res = res[offset:]
+	if limit > 0 && len(res) > limit {
+		res = res[:limit]
 	}
 	return res, nil
+}
+
+func (f *fakeRepo) ClaimReplay(_ context.Context, deadLetterID, tenantID string, replay *domain.WebhookDelivery, now time.Time) (*domain.WebhookDeadLetter, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	dl, ok := f.deadLetters[deadLetterID]
+	if !ok || dl.TenantID == nil || *dl.TenantID != tenantID {
+		return nil, false, domain.ErrDeadLetterNotFound
+	}
+	if dl.Status == domain.DeadLetterReplayed {
+		return cloneDeadLetter(dl), false, nil
+	}
+	if dl.Status == domain.DeadLetterDiscarded {
+		return nil, false, domain.ErrDeadLetterNotFound
+	}
+	f.deliveries[replay.ID] = replay
+	dl.Status = domain.DeadLetterReplayed
+	dl.ReplayCount++
+	dl.LastReplayedAt = &now
+	dl.ReplayToken = replay.ID
+	dl.ReplayDeliveryID = replay.ID
+	return cloneDeadLetter(dl), true, nil
+}
+
+func (f *fakeRepo) RecordDeliveryAttempt(_ context.Context, attempt *domain.WebhookDeliveryAttempt) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attempts[attempt.DeliveryID] = append(f.attempts[attempt.DeliveryID], attempt)
+	return nil
+}
+
+func (f *fakeRepo) ListDeliveryAttempts(_ context.Context, deliveryID string) ([]*domain.WebhookDeliveryAttempt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*domain.WebhookDeliveryAttempt(nil), f.attempts[deliveryID]...), nil
+}
+
+func (f *fakeRepo) PruneDeadLetters(_ context.Context, before time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var removed int64
+	for id, dl := range f.deadLetters {
+		if dl.CreatedAt.Before(before) {
+			delete(f.deadLetters, id)
+			removed++
+		}
+	}
+	return removed, nil
 }
 
 func (f *fakeRepo) CreateSubscription(_ context.Context, sub *domain.WebhookSubscription) error {
@@ -191,7 +290,7 @@ func TestWebhookService_MaxAttemptsAndDeadLetter(t *testing.T) {
 		t.Fatalf("expected deliver error due to max attempts reached, got nil")
 	}
 
-	dls, err := repo.ListDeadLetters(context.Background(), nil, 10, 0)
+	dls, err := repo.ListDeadLetters(context.Background(), domain.DeadLetterFilter{}, 10, 0)
 	if err != nil || len(dls) != 1 {
 		t.Fatalf("expected 1 dead letter record, got %d (err: %v)", len(dls), err)
 	}

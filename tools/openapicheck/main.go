@@ -40,6 +40,7 @@ var idempotentRoutes = []string{
 	"POST /v1/transfers",
 	"POST /v1/transfers/batch",
 	"POST /v1/schedules",
+	"POST /v1/webhooks/dead-letters/{id}/replay",
 }
 
 // idempotencyHeader is the header internal/server/idempotency reads. The

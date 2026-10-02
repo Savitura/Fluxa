@@ -12,6 +12,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,10 +32,12 @@ func (m *mockRedis) Close() {
 	m.mr.Close()
 }
 
-func (m *mockRedis) ClientOptions() *redis.Options {
-	return &redis.Options{
-		Addr: m.mr.Addr(),
-	}
+func (m *mockRedis) redisOpt() asynq.RedisConnOpt {
+	return asynq.RedisClientOpt{Addr: m.mr.Addr()}
+}
+
+func (m *mockRedis) client() redis.UniversalClient {
+	return redis.NewClient(&redis.Options{Addr: m.mr.Addr()})
 }
 
 func TestDispatcher_SendsNonEmptyBodyMatchingPayload(t *testing.T) {
@@ -113,26 +116,34 @@ func TestDispatcher_SSRFAndAsync(t *testing.T) {
 	rdb := newMockRedis(t)
 	defer rdb.Close()
 
-	qClient := queue.NewClientWithOptions(rdb.ClientOptions())
+	rdbClient := rdb.client()
+	defer rdbClient.Close()
+	qClient := queue.NewClientWithOptions(rdb.redisOpt())
 	defer qClient.Close()
 
-	svc := NewService(repo, rdb, qClient, 120, false)
+	svc := NewService(repo, rdbClient, qClient, 120, false)
 	Dispatcher := NewDispatcher(svc, qClient)
 
-	ep, _, err := svc.RegisterEndpoint(context.Background(), "https://example.com/webhook", []string{"transfer.completed"})
-	require.NoError(t, err)
+	// A loopback endpoint cannot be registered through the public API — the
+	// SSRF guard rejects it — so seed it directly. Dispatch must skip it and
+	// still report success, because one unsafe endpoint must not fail the event.
+	loopbackEp := &domain.WebhookEndpoint{
+		ID:        "ep-loopback",
+		URL:       "http://127.0.0.1/webhook",
+		Secret:    "whsec_loopback",
+		Events:    []string{"transfer.settled"},
+		Active:    true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, repo.CreateEndpoint(context.Background(), loopbackEp))
 
-	err = Dispatcher.Dispatch(context.Background(), "transfer.completed", map[string]string{"id": "tx_123"})
+	err := Dispatcher.Dispatch(context.Background(), "transfer.settled", map[string]string{"id": "tx_123"})
 	assert.NoError(t, err)
 
-	// Test loopback URL rejection
-	loopbackEp, _, err := svc.RegisterEndpoint(context.Background(), "http://127.0.0.1/webhook", []string{"transfer.completed"})
+	deliveries, err := repo.ListDeliveries(context.Background(), loopbackEp.ID, 10, 0)
 	require.NoError(t, err)
-	err = Dispatcher.Dispatch(context.Background(), "transfer.completed", map[string]string{"id": "tx_123"})
-	assert.NoError(t, err) // Dispatch should skip unsafe endpoints and not fail
-
-	_ = loopbackEp
-	_ = ep
+	assert.Empty(t, deliveries, "an unsafe endpoint must not have a delivery queued")
 }
 
 func TestDispatcher_TimeoutAndMetadata(t *testing.T) {
@@ -155,10 +166,12 @@ func TestDispatcher_ComprehensiveSSRFAndTimeoutScenarios(t *testing.T) {
 	rdb := newMockRedis(t)
 	defer rdb.Close()
 
-	qClient := queue.NewClientWithOptions(rdb.ClientOptions())
+	rdbClient := rdb.client()
+	defer rdbClient.Close()
+	qClient := queue.NewClientWithOptions(rdb.redisOpt())
 	defer qClient.Close()
 
-	svc := NewService(repo, rdb, qClient, 120, false)
+	svc := NewService(repo, rdbClient, qClient, 120, false)
 	_ = NewDispatcher(svc, qClient)
 
 	ctx := context.Background()

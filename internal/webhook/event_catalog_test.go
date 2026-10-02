@@ -35,7 +35,9 @@ func TestListEventCatalogSearchesNameAndDescription(t *testing.T) {
 		query string
 		want  int
 	}{
-		{"transfer", 2},
+		// "transfers" appears in the batch.completed description, so the
+		// substring search matches three entries, not two.
+		{"transfer", 3},
 		{"confirmed on Stellar", 1},
 		{"no-such-event", 0},
 	} {

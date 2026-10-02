@@ -198,10 +198,10 @@ func (r *WebhookRepository) GetSubscriptionsForEvent(ctx context.Context, tenant
 func (r *WebhookRepository) CreateDelivery(ctx context.Context, d *domain.WebhookDelivery) error {
 	d.Mode = webhookMode(ctx)
 	_, err := r.db.Exec(ctx,
-		`INSERT INTO webhook_deliveries (id, endpoint_id, tenant_id, mode, event_type, method, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		`INSERT INTO webhook_deliveries (id, endpoint_id, tenant_id, mode, event_type, method, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, replay_of, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NULLIF($16, '')::uuid,$17,$18)`,
 		d.ID, d.EndpointID, nullableUUID(d.TenantID), d.Mode, d.EventType, d.Method, d.Payload, d.Status,
-		d.ResponseCode, d.ResponseBody, d.ErrorMessage, d.AttemptCount, d.MaxAttempts, d.NextAttemptAt, d.LastAttempt, d.CreatedAt, d.UpdatedAt)
+		d.ResponseCode, d.ResponseBody, d.ErrorMessage, d.AttemptCount, d.MaxAttempts, d.NextAttemptAt, d.LastAttempt, d.ReplayOf, d.CreatedAt, d.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create webhook delivery: %w", err)
 	}
@@ -211,9 +211,9 @@ func (r *WebhookRepository) CreateDelivery(ctx context.Context, d *domain.Webhoo
 func (r *WebhookRepository) GetDelivery(ctx context.Context, id string) (*domain.WebhookDelivery, error) {
 	d := &domain.WebhookDelivery{}
 	err := r.db.QueryRow(ctx,
-		`SELECT id, endpoint_id, tenant_id, mode, event_type, method, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, created_at, updated_at
+		`SELECT id, endpoint_id, tenant_id, mode, event_type, method, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, COALESCE(replay_of::text, ''), created_at, updated_at
 		 FROM webhook_deliveries WHERE id=$1 AND mode=$2`, id, webhookMode(ctx)).Scan(
-		&d.ID, &d.EndpointID, &d.TenantID, &d.Mode, &d.EventType, &d.Method, &d.Payload, &d.Status, &d.ResponseCode, &d.ResponseBody, &d.ErrorMessage, &d.AttemptCount, &d.MaxAttempts, &d.NextAttemptAt, &d.LastAttempt, &d.CreatedAt, &d.UpdatedAt)
+		&d.ID, &d.EndpointID, &d.TenantID, &d.Mode, &d.EventType, &d.Method, &d.Payload, &d.Status, &d.ResponseCode, &d.ResponseBody, &d.ErrorMessage, &d.AttemptCount, &d.MaxAttempts, &d.NextAttemptAt, &d.LastAttempt, &d.ReplayOf, &d.CreatedAt, &d.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrWebhookDeliveryNotFound
 	}
@@ -232,7 +232,7 @@ func (r *WebhookRepository) UpdateDelivery(ctx context.Context, d *domain.Webhoo
 
 func (r *WebhookRepository) ListDeliveries(ctx context.Context, endpointID string, limit, offset int) ([]*domain.WebhookDelivery, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT id, endpoint_id, tenant_id, mode, event_type, method, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, created_at, updated_at
+		`SELECT id, endpoint_id, tenant_id, mode, event_type, method, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, COALESCE(replay_of::text, ''), created_at, updated_at
 		 FROM webhook_deliveries WHERE endpoint_id=$1 AND mode=$2 ORDER BY created_at DESC LIMIT $3 OFFSET $4`, endpointID, webhookMode(ctx), limit, offset)
 	if err != nil {
 		return nil, err
@@ -241,7 +241,7 @@ func (r *WebhookRepository) ListDeliveries(ctx context.Context, endpointID strin
 	deliveries := make([]*domain.WebhookDelivery, 0)
 	for rows.Next() {
 		d := &domain.WebhookDelivery{}
-		if err := rows.Scan(&d.ID, &d.EndpointID, &d.TenantID, &d.Mode, &d.EventType, &d.Method, &d.Payload, &d.Status, &d.ResponseCode, &d.ResponseBody, &d.ErrorMessage, &d.AttemptCount, &d.MaxAttempts, &d.NextAttemptAt, &d.LastAttempt, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.EndpointID, &d.TenantID, &d.Mode, &d.EventType, &d.Method, &d.Payload, &d.Status, &d.ResponseCode, &d.ResponseBody, &d.ErrorMessage, &d.AttemptCount, &d.MaxAttempts, &d.NextAttemptAt, &d.LastAttempt, &d.ReplayOf, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, err
 		}
 		deliveries = append(deliveries, d)
@@ -249,49 +249,215 @@ func (r *WebhookRepository) ListDeliveries(ctx context.Context, endpointID strin
 	return deliveries, rows.Err()
 }
 
+// deadLetterColumns is the projection shared by every dead-letter read so the
+// scan order has exactly one definition.
+const deadLetterColumns = `id, endpoint_id, tenant_id, mode, delivery_id, event_type, payload, error_message, attempt_count, status, replay_count, last_replayed_at, COALESCE(replay_token, ''), COALESCE(replay_delivery_id::text, ''), redacted_fields, retain_until, created_at`
+
+func scanDeadLetter(row rowScanner, dl *domain.WebhookDeadLetter) error {
+	var status string
+	if err := row.Scan(
+		&dl.ID, &dl.EndpointID, &dl.TenantID, &dl.Mode, &dl.DeliveryID, &dl.EventType, &dl.Payload,
+		&dl.ErrorMessage, &dl.AttemptCount, &status, &dl.ReplayCount, &dl.LastReplayedAt, &dl.ReplayToken,
+		&dl.ReplayDeliveryID, &dl.RedactedFields, &dl.RetainUntil, &dl.CreatedAt,
+	); err != nil {
+		return err
+	}
+	dl.Status = domain.DeadLetterStatus(status)
+	return nil
+}
+
 func (r *WebhookRepository) CreateDeadLetter(ctx context.Context, dl *domain.WebhookDeadLetter) error {
 	dl.Mode = webhookMode(ctx)
+	if dl.Status == "" {
+		dl.Status = domain.DeadLetterPending
+	}
+	if dl.RedactedFields == nil {
+		dl.RedactedFields = []string{}
+	}
 	_, err := r.db.Exec(ctx,
-		`INSERT INTO webhook_dead_letters (id, endpoint_id, tenant_id, mode, delivery_id, payload, error_message, attempt_count, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		dl.ID, dl.EndpointID, nullableUUID(dl.TenantID), dl.Mode, dl.DeliveryID, dl.Payload, dl.ErrorMessage, dl.AttemptCount, dl.CreatedAt)
-	return err
+		`INSERT INTO webhook_dead_letters (id, endpoint_id, tenant_id, mode, delivery_id, event_type, payload, error_message, attempt_count, status, replay_count, last_replayed_at, replay_token, replay_delivery_id, redacted_fields, retain_until, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14, '')::uuid,$15,$16,$17)`,
+		dl.ID, dl.EndpointID, nullableUUID(dl.TenantID), dl.Mode, dl.DeliveryID, dl.EventType, dl.Payload,
+		dl.ErrorMessage, dl.AttemptCount, string(dl.Status), dl.ReplayCount, dl.LastReplayedAt,
+		nullableStringPtr(&dl.ReplayToken), dl.ReplayDeliveryID, dl.RedactedFields, dl.RetainUntil, dl.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("create webhook dead letter: %w", err)
+	}
+	return nil
 }
 
 func (r *WebhookRepository) GetDeadLetter(ctx context.Context, id string) (*domain.WebhookDeadLetter, error) {
 	dl := &domain.WebhookDeadLetter{}
-	err := r.db.QueryRow(ctx,
-		`SELECT id, endpoint_id, tenant_id, mode, delivery_id, payload, error_message, attempt_count, created_at FROM webhook_dead_letters WHERE id=$1 AND mode=$2`, id, webhookMode(ctx)).Scan(
-		&dl.ID, &dl.EndpointID, &dl.TenantID, &dl.Mode, &dl.DeliveryID, &dl.Payload, &dl.ErrorMessage, &dl.AttemptCount, &dl.CreatedAt)
+	err := scanDeadLetter(r.db.QueryRow(ctx,
+		`SELECT `+deadLetterColumns+` FROM webhook_dead_letters WHERE id=$1 AND mode=$2`, id, webhookMode(ctx)), dl)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, errors.New("dead letter not found")
+		return nil, domain.ErrDeadLetterNotFound
 	}
-	return dl, err
+	if err != nil {
+		return nil, fmt.Errorf("get webhook dead letter: %w", err)
+	}
+	return dl, nil
 }
 
-func (r *WebhookRepository) ListDeadLetters(ctx context.Context, tenantID *string, limit, offset int) ([]*domain.WebhookDeadLetter, error) {
-	query := `SELECT id, endpoint_id, tenant_id, mode, delivery_id, payload, error_message, attempt_count, created_at FROM webhook_dead_letters WHERE mode=$1`
-	args := []interface{}{webhookMode(ctx)}
-	if tenantID != nil && *tenantID != "" {
-		query += ` AND tenant_id=$2`
-		args = append(args, *tenantID)
+func (r *WebhookRepository) GetDeadLetterForTenant(ctx context.Context, id, tenantID string) (*domain.WebhookDeadLetter, error) {
+	dl := &domain.WebhookDeadLetter{}
+	err := scanDeadLetter(r.db.QueryRow(ctx,
+		`SELECT `+deadLetterColumns+` FROM webhook_dead_letters WHERE id=$1 AND tenant_id=$2 AND mode=$3`,
+		id, tenantID, webhookMode(ctx)), dl)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrDeadLetterNotFound
 	}
-	query += ` ORDER BY created_at DESC LIMIT $` + fmt.Sprint(len(args)+1) + ` OFFSET $` + fmt.Sprint(len(args)+2)
+	if err != nil {
+		return nil, fmt.Errorf("get tenant webhook dead letter: %w", err)
+	}
+	return dl, nil
+}
+
+func (r *WebhookRepository) ListDeadLetters(ctx context.Context, filter domain.DeadLetterFilter, limit, offset int) ([]*domain.WebhookDeadLetter, error) {
+	query := `SELECT ` + deadLetterColumns + ` FROM webhook_dead_letters WHERE mode=$1`
+	args := []interface{}{webhookMode(ctx)}
+	add := func(column string, value interface{}) {
+		args = append(args, value)
+		query += fmt.Sprintf(" AND %s=$%d", column, len(args))
+	}
+	if filter.TenantID != "" {
+		add("COALESCE(tenant_id::text, '')", filter.TenantID)
+	}
+	if filter.EndpointID != "" {
+		add("endpoint_id", filter.EndpointID)
+	}
+	if filter.EventType != "" {
+		add("event_type", filter.EventType)
+	}
+	if filter.Status != "" {
+		add("status", string(filter.Status))
+	}
+	if filter.Since != nil {
+		add("created_at >=", *filter.Since)
+	}
+	if filter.Until != nil {
+		add("created_at <=", *filter.Until)
+	}
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
 	args = append(args, limit, offset)
+
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list webhook dead letters: %w", err)
 	}
 	defer rows.Close()
 	deadLetters := make([]*domain.WebhookDeadLetter, 0)
 	for rows.Next() {
 		dl := &domain.WebhookDeadLetter{}
-		if err := rows.Scan(&dl.ID, &dl.EndpointID, &dl.TenantID, &dl.Mode, &dl.DeliveryID, &dl.Payload, &dl.ErrorMessage, &dl.AttemptCount, &dl.CreatedAt); err != nil {
+		if err := scanDeadLetter(rows, dl); err != nil {
 			return nil, err
 		}
 		deadLetters = append(deadLetters, dl)
 	}
 	return deadLetters, rows.Err()
+}
+
+// ClaimReplay marks a dead letter replayed and inserts the delivery the replay
+// produced. The dead-letter row is locked FOR UPDATE for the whole transaction,
+// so two concurrent replays serialize: the second sees status='replayed' and
+// returns the first request's delivery instead of creating a duplicate.
+func (r *WebhookRepository) ClaimReplay(ctx context.Context, deadLetterID, tenantID string, replay *domain.WebhookDelivery, now time.Time) (*domain.WebhookDeadLetter, bool, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("begin webhook dead letter replay: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	dl := &domain.WebhookDeadLetter{}
+	err = scanDeadLetter(tx.QueryRow(ctx,
+		`SELECT `+deadLetterColumns+` FROM webhook_dead_letters WHERE id=$1 AND tenant_id=$2 AND mode=$3 FOR UPDATE`,
+		deadLetterID, tenantID, webhookMode(ctx)), dl)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, domain.ErrDeadLetterNotFound
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("lock webhook dead letter: %w", err)
+	}
+	if dl.Status == domain.DeadLetterReplayed {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, false, fmt.Errorf("commit webhook dead letter replay check: %w", err)
+		}
+		return dl, false, nil
+	}
+	if dl.Status == domain.DeadLetterDiscarded {
+		return nil, false, fmt.Errorf("%w: dead letter was discarded", domain.ErrDeadLetterNotFound)
+	}
+
+	replay.Mode = dl.Mode
+	if replay.ReplayOf == "" {
+		replay.ReplayOf = dl.ID
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO webhook_deliveries (id, endpoint_id, tenant_id, mode, event_type, method, payload, status, response_code, response_body, error_message, attempt_count, max_attempts, next_attempt_at, last_attempt, replay_of, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NULLIF($16, '')::uuid,$17,$18)`,
+		replay.ID, replay.EndpointID, nullableUUID(replay.TenantID), replay.Mode, replay.EventType, replay.Method,
+		replay.Payload, replay.Status, replay.ResponseCode, replay.ResponseBody, replay.ErrorMessage,
+		replay.AttemptCount, replay.MaxAttempts, replay.NextAttemptAt, replay.LastAttempt, replay.ReplayOf,
+		replay.CreatedAt, replay.UpdatedAt); err != nil {
+		return nil, false, fmt.Errorf("create replay delivery: %w", err)
+	}
+
+	if err := scanDeadLetter(tx.QueryRow(ctx,
+		`UPDATE webhook_dead_letters SET status=$2, replay_count=replay_count+1, last_replayed_at=$3, replay_token=$4, replay_delivery_id=$5
+		 WHERE id=$1 RETURNING `+deadLetterColumns,
+		dl.ID, string(domain.DeadLetterReplayed), now, replay.ID, replay.ID), dl); err != nil {
+		return nil, false, fmt.Errorf("mark webhook dead letter replayed: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, fmt.Errorf("commit webhook dead letter replay: %w", err)
+	}
+	return dl, true, nil
+}
+
+func (r *WebhookRepository) RecordDeliveryAttempt(ctx context.Context, attempt *domain.WebhookDeliveryAttempt) error {
+	if !attempt.Mode.Valid() {
+		attempt.Mode = webhookMode(ctx)
+	}
+	_, err := r.db.Exec(ctx,
+		`INSERT INTO webhook_delivery_attempts (id, delivery_id, dead_letter_id, tenant_id, mode, kind, attempt_number, status, response_code, error_message, occurred_at)
+		 VALUES ($1,$2,NULLIF($3, '')::uuid,$4,$5,$6,$7,$8,NULLIF($9, 0),$10,$11)`,
+		attempt.ID, attempt.DeliveryID, attempt.DeadLetterID, nullableUUID(attempt.TenantID), attempt.Mode,
+		string(attempt.Kind), attempt.AttemptNumber, attempt.Status, attempt.ResponseCode, attempt.ErrorMessage, attempt.OccurredAt)
+	if err != nil {
+		return fmt.Errorf("record webhook delivery attempt: %w", err)
+	}
+	return nil
+}
+
+func (r *WebhookRepository) ListDeliveryAttempts(ctx context.Context, deliveryID string) ([]*domain.WebhookDeliveryAttempt, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT id, delivery_id, COALESCE(dead_letter_id::text, ''), tenant_id, mode, kind, attempt_number, status, COALESCE(response_code, 0), COALESCE(error_message, ''), occurred_at
+		 FROM webhook_delivery_attempts WHERE delivery_id=$1 AND mode=$2 ORDER BY attempt_number, occurred_at`,
+		deliveryID, webhookMode(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("list webhook delivery attempts: %w", err)
+	}
+	defer rows.Close()
+	attempts := make([]*domain.WebhookDeliveryAttempt, 0)
+	for rows.Next() {
+		attempt := &domain.WebhookDeliveryAttempt{}
+		var kind string
+		if err := rows.Scan(&attempt.ID, &attempt.DeliveryID, &attempt.DeadLetterID, &attempt.TenantID, &attempt.Mode,
+			&kind, &attempt.AttemptNumber, &attempt.Status, &attempt.ResponseCode, &attempt.ErrorMessage, &attempt.OccurredAt); err != nil {
+			return nil, err
+		}
+		attempt.Kind = domain.AttemptKind(kind)
+		attempts = append(attempts, attempt)
+	}
+	return attempts, rows.Err()
+}
+
+func (r *WebhookRepository) PruneDeadLetters(ctx context.Context, before time.Time) (int64, error) {
+	tag, err := r.db.Exec(ctx, `DELETE FROM webhook_dead_letters WHERE mode=$1 AND created_at < $2`, webhookMode(ctx), before)
+	if err != nil {
+		return 0, fmt.Errorf("prune webhook dead letters: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (r *WebhookRepository) GetConfig(ctx context.Context, tenantID string) (*domain.TenantWebhookConfig, error) {

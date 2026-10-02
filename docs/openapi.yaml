@@ -1827,6 +1827,143 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /v1/webhooks/dead-letters:
+    get:
+      operationId: listWebhookDeadLetters
+      summary: List dead-lettered webhook deliveries
+      description: Returns exhausted deliveries retained for the authenticated tenant. Payloads have sensitive fields redacted and records past the retention window are purged.
+      tags:
+      - Webhooks
+      parameters:
+      - name: event
+        in: query
+        required: false
+        description: Filter by the original event type
+        schema:
+          type: string
+      - name: endpoint_id
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - pending
+          - replayed
+          - discarded
+      - name: since
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: until
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 50
+          maximum: 200
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+      responses:
+        '200':
+          description: Tenant-scoped dead letters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dead_letters:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WebhookDeadLetter'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /v1/webhooks/dead-letters/{id}:
+    get:
+      operationId: getWebhookDeadLetter
+      summary: Get a dead-lettered webhook delivery
+      description: Returns one dead letter with its attempt history, including whether each attempt was an automatic retry or an operator replay.
+      tags:
+      - Webhooks
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The dead letter and its attempt history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeadLetter'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /v1/webhooks/dead-letters/{id}/replay:
+    post:
+      operationId: replayWebhookDeadLetter
+      summary: Replay a dead-lettered webhook delivery
+      description: Re-sends the retained event to its original endpoint, preserving the event identity while issuing a new delivery identity. The delivery is signed with the endpoint''s current signing secret and the standard timestamped signature. Repeated or concurrent replays are idempotent and return the same delivery.
+      tags:
+      - Webhooks
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '202':
+          description: The dead letter was replayed (or had already been replayed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeadLetter'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: A request with the same idempotency key is still processing, or the original endpoint is unavailable for replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /v1/webhooks/fiat/{provider}:
     post:
       operationId: handleFiatWebhook
@@ -4077,6 +4214,84 @@ components:
           format: date-time
           nullable: true
         created_at:
+          type: string
+          format: date-time
+    WebhookDeadLetter:
+      type: object
+      properties:
+        id:
+          type: string
+        endpoint_id:
+          type: string
+        tenant_id:
+          type: string
+          nullable: true
+        delivery_id:
+          type: string
+          description: The original delivery identity that was exhausted
+        event_type:
+          type: string
+        payload:
+          type: string
+          description: Event body with sensitive fields redacted
+        error_message:
+          type: string
+        attempt_count:
+          type: integer
+        status:
+          type: string
+          enum:
+          - pending
+          - replayed
+          - discarded
+        replay_count:
+          type: integer
+        last_replayed_at:
+          type: string
+          format: date-time
+          nullable: true
+        replay_delivery_id:
+          type: string
+          nullable: true
+          description: The delivery identity produced by the replay
+        redacted_fields:
+          type: array
+          items:
+            type: string
+        retain_until:
+          type: string
+          format: date-time
+          nullable: true
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookDeliveryAttempt'
+        created_at:
+          type: string
+          format: date-time
+    WebhookDeliveryAttempt:
+      type: object
+      properties:
+        id:
+          type: string
+        delivery_id:
+          type: string
+        kind:
+          type: string
+          enum:
+          - automatic
+          - replay
+        attempt_number:
+          type: integer
+        status:
+          type: string
+        response_code:
+          type: integer
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        occurred_at:
           type: string
           format: date-time
     FeeScheduleResponse:

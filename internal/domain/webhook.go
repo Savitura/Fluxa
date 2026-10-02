@@ -1,6 +1,10 @@
 package domain
 
 import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -96,20 +100,163 @@ type WebhookDelivery struct {
 	MaxAttempts   int        `json:"max_attempts"`
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 	LastAttempt   *time.Time `json:"last_attempt,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	// ReplayOf is set when the delivery was created by an operator replay. It
+	// holds the dead-letter ID being replayed, so attempt history can tell an
+	// automatic retry from an operator replay.
+	ReplayOf  string    `json:"replay_of,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// DeadLetterStatus is the operator-facing state of a dead-lettered delivery.
+type DeadLetterStatus string
+
+const (
+	// DeadLetterPending means the exhausted delivery is retained and has not
+	// been replayed yet.
+	DeadLetterPending DeadLetterStatus = "pending"
+	// DeadLetterReplayed means an operator replayed it; ReplayDeliveryID points
+	// at the delivery that resulted.
+	DeadLetterReplayed DeadLetterStatus = "replayed"
+	// DeadLetterDiscarded means an operator acknowledged it without replaying.
+	DeadLetterDiscarded DeadLetterStatus = "discarded"
+)
+
+// AttemptKind distinguishes the worker's own retries from an operator replay.
+type AttemptKind string
+
+const (
+	AttemptKindAutomatic AttemptKind = "automatic"
+	AttemptKindReplay    AttemptKind = "replay"
+)
+
+// WebhookDeliveryAttempt is one recorded delivery attempt. The table is
+// append-only and outlives the delivery so a dead-lettered event keeps its full
+// history even after the delivery row is pruned.
+type WebhookDeliveryAttempt struct {
+	ID            string      `json:"id"`
+	DeliveryID    string      `json:"delivery_id"`
+	DeadLetterID  string      `json:"dead_letter_id,omitempty"`
+	TenantID      *string     `json:"tenant_id,omitempty"`
+	Mode          Mode        `json:"mode"`
+	Kind          AttemptKind `json:"kind"`
+	AttemptNumber int         `json:"attempt_number"`
+	Status        string      `json:"status"`
+	ResponseCode  int         `json:"response_code,omitempty"`
+	ErrorMessage  string      `json:"error_message,omitempty"`
+	OccurredAt    time.Time   `json:"occurred_at"`
 }
 
 type WebhookDeadLetter struct {
-	ID           string    `json:"id"`
-	EndpointID   string    `json:"endpoint_id"`
-	TenantID     *string   `json:"tenant_id,omitempty"`
-	Mode         Mode      `json:"mode"`
-	DeliveryID   string    `json:"delivery_id"`
-	Payload      string    `json:"payload"`
-	ErrorMessage string    `json:"error_message"`
-	AttemptCount int       `json:"attempt_count"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID             string           `json:"id"`
+	EndpointID     string           `json:"endpoint_id"`
+	TenantID       *string          `json:"tenant_id,omitempty"`
+	Mode           Mode             `json:"mode"`
+	DeliveryID     string           `json:"delivery_id"`
+	EventType      string           `json:"event_type"`
+	Payload        string           `json:"payload"`
+	ErrorMessage   string           `json:"error_message"`
+	AttemptCount   int              `json:"attempt_count"`
+	Status         DeadLetterStatus `json:"status"`
+	ReplayCount    int              `json:"replay_count"`
+	LastReplayedAt *time.Time       `json:"last_replayed_at,omitempty"`
+	ReplayToken    string           `json:"replay_token,omitempty"`
+	// ReplayDeliveryID is the delivery a replay produced. It is empty until the
+	// dead letter has been replayed.
+	ReplayDeliveryID string `json:"replay_delivery_id,omitempty"`
+	// RedactedFields lists the JSON paths stripped from Payload on read. The
+	// stored payload itself is unmodified so a replay still carries the original
+	// event body; redaction applies only to what an operator can see.
+	RedactedFields []string   `json:"redacted_fields,omitempty"`
+	RetainUntil    *time.Time `json:"retain_until,omitempty"`
+	// Attempts is populated on the detail endpoint. The list endpoint leaves it
+	// nil to keep responses bounded.
+	Attempts  []*WebhookDeliveryAttempt `json:"attempts,omitempty"`
+	CreatedAt time.Time                 `json:"created_at"`
+}
+
+// DeadLetterFilter narrows a tenant-scoped dead-letter listing. Zero values are
+// ignored, so an empty filter lists everything the tenant owns.
+type DeadLetterFilter struct {
+	TenantID   string
+	EndpointID string
+	EventType  string
+	Status     DeadLetterStatus
+	Since      *time.Time
+	Until      *time.Time
+}
+
+// sensitivePayloadKeys are matched case-insensitively as substrings of a JSON
+// object key. The list errs toward over-redaction: showing an operator a
+// redacted token is recoverable, leaking a live credential is not.
+var sensitivePayloadKeys = []string{
+	"secret", "token", "password", "passwd", "authorization", "auth",
+	"api_key", "apikey", "private_key", "privatekey", "signature",
+	"card", "cvv", "cvc", "ssn", "iban", "account_number",
+}
+
+// RedactWebhookPayload returns a copy of payload with sensitive object keys
+// replaced by "[REDACTED]", plus the sorted list of redacted JSON paths. A
+// payload that is not a JSON object (or not valid JSON) is returned unchanged:
+// redaction must never turn an inspectable record into an error.
+func RedactWebhookPayload(payload string) (string, []string) {
+	var decoded interface{}
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		return payload, nil
+	}
+	fields := make([]string, 0)
+	redacted := redactValue(decoded, "", &fields)
+	if len(fields) == 0 {
+		return payload, nil
+	}
+	encoded, err := json.Marshal(redacted)
+	if err != nil {
+		return payload, nil
+	}
+	sort.Strings(fields)
+	return string(encoded), fields
+}
+
+func redactValue(value interface{}, path string, fields *[]string) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for key, child := range typed {
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			if isSensitiveKey(key) {
+				out[key] = "[REDACTED]"
+				*fields = append(*fields, childPath)
+				continue
+			}
+			out[key] = redactValue(child, childPath, fields)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(typed))
+		for index, child := range typed {
+			childPath := fmt.Sprintf("%s.%d", path, index)
+			if path == "" {
+				childPath = fmt.Sprintf("%d", index)
+			}
+			out[index] = redactValue(child, childPath, fields)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func isSensitiveKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, sensitive := range sensitivePayloadKeys {
+		if strings.Contains(lower, sensitive) {
+			return true
+		}
+	}
+	return false
 }
 
 type WebhookHealth struct {
