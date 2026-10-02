@@ -71,6 +71,7 @@ routes:
   - "POST /v1/beneficiaries/{id}/activate"
   - POST /v1/claimable-balances
   - "POST /v1/claimable-balances/{id}/claim"
+  - POST /v1/fees/estimate
   - POST /v1/fees/preview
   - POST /v1/fiat/quote
   - POST /v1/fx/convert
