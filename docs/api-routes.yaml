@@ -56,6 +56,8 @@ routes:
   - "GET /v1/wallets/{id}"
   - "GET /v1/wallets/{id}/balances"
   - GET /v1/webhooks
+  - GET /v1/webhooks/dead-letters
+  - "GET /v1/webhooks/dead-letters/{id}"
   - GET /v1/webhooks/secret
   - "GET /v1/webhooks/{id}/deliveries"
   - "PATCH /v1/keys/{id}/expiry"
@@ -88,6 +90,7 @@ routes:
   - "POST /v1/wallets/{id}/trustlines"
   - "POST /v1/wallets/{id}/withdraw/fiat"
   - POST /v1/webhooks
+  - "POST /v1/webhooks/dead-letters/{id}/replay"
   - "POST /v1/webhooks/fiat/{provider}"
   - "POST /v1/webhooks/secret/rotate"
   - POST /v1/withdrawals

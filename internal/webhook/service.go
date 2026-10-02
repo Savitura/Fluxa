@@ -39,7 +39,17 @@ type Repository interface {
 	ListDeliveries(ctx context.Context, endpointID string, limit, offset int) ([]*domain.WebhookDelivery, error)
 	CreateDeadLetter(ctx context.Context, dl *domain.WebhookDeadLetter) error
 	GetDeadLetter(ctx context.Context, id string) (*domain.WebhookDeadLetter, error)
-	ListDeadLetters(ctx context.Context, tenantID *string, limit, offset int) ([]*domain.WebhookDeadLetter, error)
+	GetDeadLetterForTenant(ctx context.Context, id, tenantID string) (*domain.WebhookDeadLetter, error)
+	ListDeadLetters(ctx context.Context, filter domain.DeadLetterFilter, limit, offset int) ([]*domain.WebhookDeadLetter, error)
+	// ClaimReplay atomically marks a dead letter replayed and inserts the
+	// delivery the replay produced, under a row lock. It returns created=false
+	// when another request already replayed the dead letter; the returned dead
+	// letter then carries the winning replay_delivery_id so the caller can
+	// return the same result without sending a second delivery.
+	ClaimReplay(ctx context.Context, deadLetterID, tenantID string, replay *domain.WebhookDelivery, now time.Time) (*domain.WebhookDeadLetter, bool, error)
+	RecordDeliveryAttempt(ctx context.Context, attempt *domain.WebhookDeliveryAttempt) error
+	ListDeliveryAttempts(ctx context.Context, deliveryID string) ([]*domain.WebhookDeliveryAttempt, error)
+	PruneDeadLetters(ctx context.Context, before time.Time) (int64, error)
 }
 
 type Service interface {
@@ -47,8 +57,10 @@ type Service interface {
 	ListEndpoints(ctx context.Context) ([]*domain.WebhookEndpoint, error)
 	DeleteEndpoint(ctx context.Context, id string) error
 	ListDeliveries(ctx context.Context, endpointID string, limit int) ([]*domain.WebhookDelivery, error)
-	ListDeadLetters(ctx context.Context, limit int) ([]*domain.WebhookDeadLetter, error)
-	ReplayDeadLetter(ctx context.Context, deadLetterID string) error
+	ListDeadLetters(ctx context.Context, filter domain.DeadLetterFilter, limit, offset int) ([]*domain.WebhookDeadLetter, error)
+	GetDeadLetter(ctx context.Context, id string) (*domain.WebhookDeadLetter, error)
+	ReplayDeadLetter(ctx context.Context, deadLetterID string) (*domain.WebhookDeadLetter, error)
+	PruneDeadLetters(ctx context.Context, retention time.Duration) (int64, error)
 	GetEndpointHealth(ctx context.Context, endpointID string) (*domain.WebhookHealth, error)
 	Dispatch(ctx context.Context, eventType domain.EventType, payload interface{}) error
 	Deliver(ctx context.Context, deliveryID string) error
@@ -300,46 +312,172 @@ func (s *service) ListDeliveries(ctx context.Context, endpointID string, limit i
 	return s.repo.ListDeliveries(ctx, endpointID, limit, 0)
 }
 
-func (s *service) ListDeadLetters(ctx context.Context, limit int) ([]*domain.WebhookDeadLetter, error) {
+// defaultDeadLetterRetention bounds how long an exhausted delivery is kept
+// before the retention sweep removes it. Thirty days mirrors the audit window
+// the rest of the platform uses.
+const defaultDeadLetterRetention = 30 * 24 * time.Hour
+
+// maxDeadLetterPageSize caps a single listing so a tenant with a large backlog
+// cannot force an unbounded response.
+const maxDeadLetterPageSize = 200
+
+func (s *service) ListDeadLetters(ctx context.Context, filter domain.DeadLetterFilter, limit, offset int) ([]*domain.WebhookDeadLetter, error) {
+	tenantID, err := requireTenantID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 50
 	}
-	tid := tenant.IDFromContext(ctx)
-	var tenantPtr *string
-	if tid != "" {
-		tenantPtr = &tid
+	if limit > maxDeadLetterPageSize {
+		limit = maxDeadLetterPageSize
 	}
-	return s.repo.ListDeadLetters(ctx, tenantPtr, limit, 0)
+	if offset < 0 {
+		offset = 0
+	}
+	filter.TenantID = tenantID
+
+	// Best-effort retention: the sweep keeps the table from growing without
+	// bound without requiring a dedicated worker, and a failure here must not
+	// hide the listing the operator asked for.
+	if _, err := s.PruneDeadLetters(ctx, defaultDeadLetterRetention); err != nil {
+		log.Error().Err(err).Msg("webhook: dead letter retention sweep failed")
+	}
+
+	deadLetters, err := s.repo.ListDeadLetters(ctx, filter, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	for _, dl := range deadLetters {
+		redactDeadLetter(dl)
+	}
+	return deadLetters, nil
 }
 
-func (s *service) ReplayDeadLetter(ctx context.Context, deadLetterID string) error {
-	dl, err := s.repo.GetDeadLetter(ctx, deadLetterID)
+func (s *service) GetDeadLetter(ctx context.Context, id string) (*domain.WebhookDeadLetter, error) {
+	tenantID, err := requireTenantID(ctx)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	dl, err := s.repo.GetDeadLetterForTenant(ctx, id, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	attempts, err := s.repo.ListDeliveryAttempts(ctx, dl.DeliveryID)
+	if err != nil {
+		return nil, err
+	}
+	dl.Attempts = attempts
+	redactDeadLetter(dl)
+	return dl, nil
+}
+
+// redactDeadLetter strips sensitive payload fields from the value about to
+// leave the service. The stored payload keeps the original body so a replay is
+// faithful; only what an operator can read is redacted.
+func redactDeadLetter(dl *domain.WebhookDeadLetter) {
+	if dl == nil || dl.Payload == "" {
+		return
+	}
+	payload, fields := domain.RedactWebhookPayload(dl.Payload)
+	dl.Payload = payload
+	if len(fields) > 0 {
+		dl.RedactedFields = fields
+	}
+}
+
+// ReplayDeadLetter re-sends an exhausted delivery to its original endpoint with
+// the original event identity and a brand-new delivery identity. The delivery
+// is queued through the normal delivery path, so it is signed with the current
+// signing secret and the standard timestamped signature.
+func (s *service) ReplayDeadLetter(ctx context.Context, deadLetterID string) (*domain.WebhookDeadLetter, error) {
+	tenantID, err := requireTenantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dl, err := s.repo.GetDeadLetterForTenant(ctx, deadLetterID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if dl.Status == domain.DeadLetterDiscarded {
+		return nil, fmt.Errorf("%w: dead letter was discarded", domain.ErrDeadLetterNotFound)
 	}
 
-	// Create a new delivery record and enqueue it immediately
-	newDel := &domain.WebhookDelivery{
+	// The replay must target the original endpoint, and only while it is still
+	// active. Replaying to a disabled endpoint would silently drop the event;
+	// replaying to a different endpoint would change its destination.
+	ep, err := s.repo.GetEndpoint(ctx, dl.EndpointID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", domain.ErrDeadLetterEndpointUnusable, err)
+	}
+	if !ep.Active {
+		return nil, fmt.Errorf("%w: endpoint is disabled", domain.ErrDeadLetterEndpointUnusable)
+	}
+	if ep.TenantID != nil && *ep.TenantID != "" && *ep.TenantID != tenantID {
+		return nil, domain.ErrDeadLetterEndpointUnusable
+	}
+
+	now := time.Now().UTC()
+	replay := &domain.WebhookDelivery{
 		ID:           uuid.New().String(),
-		EndpointID:   dl.EndpointID,
+		EndpointID:   ep.ID,
 		TenantID:     dl.TenantID,
-		EventType:    "replay",
+		EventType:    dl.EventType,
 		Payload:      dl.Payload,
 		Status:       "pending",
 		AttemptCount: 0,
 		MaxAttempts:  s.maxAttempts,
-		CreatedAt:    time.Now().UTC(),
-		UpdatedAt:    time.Now().UTC(),
+		ReplayOf:     dl.ID,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
-	if err := s.repo.CreateDelivery(ctx, newDel); err != nil {
-		return err
+
+	claimed, created, err := s.repo.ClaimReplay(ctx, dl.ID, tenantID, replay, now)
+	if err != nil {
+		return nil, err
+	}
+	if !created {
+		// Idempotent replay: an earlier (or concurrent) request already produced
+		// the delivery, so return that result instead of sending a second one.
+		redactDeadLetter(claimed)
+		return claimed, nil
+	}
+
+	// Record the operator action in the attempt timeline before the queued
+	// delivery's own attempts are appended, so the history reads
+	// replay → delivery attempt 1 → …
+	if err := s.repo.RecordDeliveryAttempt(ctx, &domain.WebhookDeliveryAttempt{
+		ID:            uuid.New().String(),
+		DeliveryID:    replay.ID,
+		DeadLetterID:  dl.ID,
+		TenantID:      dl.TenantID,
+		Mode:          dl.Mode,
+		Kind:          domain.AttemptKindReplay,
+		AttemptNumber: 0,
+		Status:        "queued",
+		OccurredAt:    now,
+	}); err != nil {
+		log.Error().Err(err).Str("delivery_id", replay.ID).Msg("webhook: failed to record replay attempt")
 	}
 
 	if s.queueClient != nil {
-		_, err = s.queueClient.EnqueueWebhookDelivery(ctx, newDel.ID)
-		return err
+		if _, err := s.queueClient.EnqueueWebhookDelivery(ctx, replay.ID); err != nil {
+			return nil, err
+		}
 	}
-	return nil
+
+	redactDeadLetter(claimed)
+	return claimed, nil
+}
+
+// PruneDeadLetters drops dead letters older than retention. A non-positive
+// retention falls back to the default so a misconfigured caller cannot wipe the
+// whole queue.
+func (s *service) PruneDeadLetters(ctx context.Context, retention time.Duration) (int64, error) {
+	if retention <= 0 {
+		retention = defaultDeadLetterRetention
+	}
+	return s.repo.PruneDeadLetters(ctx, time.Now().UTC().Add(-retention))
 }
 
 func (s *service) GetEndpointHealth(ctx context.Context, endpointID string) (*domain.WebhookHealth, error) {
@@ -508,6 +646,7 @@ func (s *service) Deliver(ctx context.Context, deliveryID string) error {
 	if code >= 200 && code < 300 {
 		deliv.Status = "success"
 		deliv.UpdatedAt = time.Now().UTC()
+		s.recordAttempt(ctx, deliv, statusSuccess, code, "")
 		_ = s.repo.UpdateDelivery(ctx, deliv)
 
 		ep.SuccessCount++
@@ -537,6 +676,12 @@ func (s *service) handleDeliveryFailure(ctx context.Context, deliv *domain.Webho
 	}
 	deliv.UpdatedAt = time.Now().UTC()
 
+	attemptCode := 0
+	if code != nil {
+		attemptCode = *code
+	}
+	s.recordAttempt(ctx, deliv, statusFailed, attemptCode, errMsg)
+
 	ep.FailureCount++
 	ep.UpdatedAt = time.Now().UTC()
 
@@ -556,14 +701,18 @@ func (s *service) handleDeliveryFailure(ctx context.Context, deliv *domain.Webho
 		deliv.Status = "dead_lettered"
 		_ = s.repo.UpdateDelivery(ctx, deliv)
 
+		retainUntil := time.Now().UTC().Add(defaultDeadLetterRetention)
 		dl := &domain.WebhookDeadLetter{
 			ID:           uuid.New().String(),
 			EndpointID:   ep.ID,
 			TenantID:     ep.TenantID,
 			DeliveryID:   deliv.ID,
+			EventType:    deliv.EventType,
 			Payload:      deliv.Payload,
 			ErrorMessage: errMsg,
 			AttemptCount: deliv.AttemptCount,
+			Status:       domain.DeadLetterPending,
+			RetainUntil:  &retainUntil,
 			CreatedAt:    time.Now().UTC(),
 		}
 		_ = s.repo.CreateDeadLetter(ctx, dl)
@@ -586,6 +735,45 @@ func (s *service) handleDeliveryFailure(ctx context.Context, deliv *domain.Webho
 		return fmt.Errorf("webhook delivery failed (attempt %d/%d): %w", deliv.AttemptCount, s.maxAttempts, cause)
 	}
 	return fmt.Errorf("webhook delivery failed (attempt %d/%d): %s", deliv.AttemptCount, s.maxAttempts, errMsg)
+}
+
+const (
+	statusSuccess = "success"
+	statusFailed  = "failed"
+)
+
+// attemptKindFor reports how a delivery came to be: an operator replay or the
+// worker's own retries. The delivery, not the individual attempt, carries the
+// distinction because every attempt of a replay is operator-initiated.
+func attemptKindFor(deliv *domain.WebhookDelivery) domain.AttemptKind {
+	if deliv.ReplayOf != "" {
+		return domain.AttemptKindReplay
+	}
+	return domain.AttemptKindAutomatic
+}
+
+// recordAttempt appends one delivery attempt to the durable history. A failure
+// to record must not fail the delivery itself — the attempt history is
+// observability, not the delivery's state machine.
+func (s *service) recordAttempt(ctx context.Context, deliv *domain.WebhookDelivery, status string, code int, errMsg string) {
+	attempt := &domain.WebhookDeliveryAttempt{
+		ID:            uuid.New().String(),
+		DeliveryID:    deliv.ID,
+		TenantID:      deliv.TenantID,
+		Mode:          deliv.Mode,
+		Kind:          attemptKindFor(deliv),
+		AttemptNumber: deliv.AttemptCount,
+		Status:        status,
+		ResponseCode:  code,
+		ErrorMessage:  errMsg,
+		OccurredAt:    time.Now().UTC(),
+	}
+	if deliv.ReplayOf != "" {
+		attempt.DeadLetterID = deliv.ReplayOf
+	}
+	if err := s.repo.RecordDeliveryAttempt(ctx, attempt); err != nil {
+		log.Error().Err(err).Str("delivery_id", deliv.ID).Msg("webhook: failed to record delivery attempt")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,6 +1349,7 @@ func (s *service) attemptConfigDelivery(ctx context.Context, config *domain.Tena
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Fluxa-Signature", signBody(config.Secret, delivery.Payload))
+	req.Header.Set("X-Fluxa-Timestamp", fmt.Sprintf("%d", now.Unix()))
 	if delivery.SigningKeyID != "" {
 		req.Header.Set("X-Fluxa-Key-ID", delivery.SigningKeyID)
 	}

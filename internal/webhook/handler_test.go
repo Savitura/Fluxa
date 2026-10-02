@@ -39,7 +39,7 @@ func TestRegisterEndpointSecretAndValidation(t *testing.T) {
 	h := NewHandler(svc)
 
 	r := chi.NewRouter()
-	h.RegisterRoutes(r)
+	r.Route("/v1/webhooks", func(r chi.Router) { h.RegisterRoutes(r) })
 
 	// Test 1: Invalid event type is rejected
 	bodyInvalid, _ := json.Marshal(map[string]interface{}{
@@ -57,7 +57,7 @@ func TestRegisterEndpointSecretAndValidation(t *testing.T) {
 	// Test 2: Valid registration returns secret once
 	bodyValid, _ := json.Marshal(map[string]interface{}{
 		"url":    "https://example.com/webhook",
-		"events": []string{domain.EventTypePaymentCompleted},
+		"events": []string{domain.EventTransferSettled},
 	})
 	reqValid := httptest.NewRequest(http.MethodPost, "/v1/webhooks", bytes.NewReader(bodyValid))
 	reqValid.Header.Set("Content-Type", "application/json")

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -57,6 +58,9 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Post("/", h.RegisterEndpoint)
 	r.Delete("/{id}", h.DeleteEndpoint)
 	r.Get("/{id}/deliveries", h.ListDeliveries)
+	r.Get("/dead-letters", h.ListDeadLetters)
+	r.Get("/dead-letters/{id}", h.GetDeadLetter)
+	r.With(h.IdempotencyMiddleware()).Post("/dead-letters/{id}/replay", h.ReplayDeadLetter)
 	r.Get("/secret", h.GetSigningSecret)
 	r.With(h.IdempotencyMiddleware()).Post("/secret/rotate", h.RotateSigningSecret)
 	r.With(VerifyRateLimit()).Post("/verify", h.VerifySignature)
@@ -177,6 +181,129 @@ func (h *Handler) ListDeliveries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.JSON(w, http.StatusOK, map[string]interface{}{"deliveries": deliveries})
+}
+
+// deadLetterFilterFromQuery translates the list endpoint's query parameters
+// into a domain filter. An unparseable date is a client error, not a silently
+// ignored filter.
+func deadLetterFilterFromQuery(r *http.Request) (domain.DeadLetterFilter, error) {
+	query := r.URL.Query()
+	filter := domain.DeadLetterFilter{
+		EndpointID: query.Get("endpoint_id"),
+		EventType:  query.Get("event"),
+		Status:     domain.DeadLetterStatus(query.Get("status")),
+	}
+	if raw := query.Get("event_type"); raw != "" {
+		filter.EventType = raw
+	}
+	if raw := query.Get("since"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return filter, fmt.Errorf("since must be RFC3339")
+		}
+		filter.Since = &parsed
+	}
+	if raw := query.Get("until"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return filter, fmt.Errorf("until must be RFC3339")
+		}
+		filter.Until = &parsed
+	}
+	switch filter.Status {
+	case "", domain.DeadLetterPending, domain.DeadLetterReplayed, domain.DeadLetterDiscarded:
+	default:
+		return filter, fmt.Errorf("status must be one of pending, replayed, discarded")
+	}
+	return filter, nil
+}
+
+func (h *Handler) ListDeadLetters(w http.ResponseWriter, r *http.Request) {
+	if tenant.IDFromContext(r.Context()) == "" {
+		api.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "tenant required")
+		return
+	}
+	filter, err := deadLetterFilterFromQuery(r)
+	if err != nil {
+		api.BadRequest(w, err.Error())
+		return
+	}
+	limit, offset := 50, 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	deadLetters, err := h.svc.ListDeadLetters(r.Context(), filter, limit, offset)
+	if err != nil {
+		api.InternalError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, map[string]interface{}{"dead_letters": deadLetters})
+}
+
+func (h *Handler) GetDeadLetter(w http.ResponseWriter, r *http.Request) {
+	if tenant.IDFromContext(r.Context()) == "" {
+		api.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "tenant required")
+		return
+	}
+	dl, err := h.svc.GetDeadLetter(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeDeadLetterError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, dl)
+}
+
+func (h *Handler) ReplayDeadLetter(w http.ResponseWriter, r *http.Request) {
+	if tenant.IDFromContext(r.Context()) == "" {
+		api.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "tenant required")
+		return
+	}
+	deadLetterID := chi.URLParam(r, "id")
+	dl, err := h.svc.ReplayDeadLetter(r.Context(), deadLetterID)
+	if err != nil {
+		writeDeadLetterError(w, err)
+		return
+	}
+	if h.audit != nil {
+		if auditErr := h.audit.Record(r.Context(), &domain.AuditEvent{
+			Action:       "webhook.dead_letter.replayed",
+			ResourceType: "webhook_dead_letter",
+			ResourceID:   dl.ID,
+			Metadata: map[string]interface{}{
+				"delivery_id":  dl.ReplayDeliveryID,
+				"endpoint_id":  dl.EndpointID,
+				"event_type":   dl.EventType,
+				"replay_count": dl.ReplayCount,
+			},
+		}); auditErr != nil {
+			tracing.Logger(r.Context()).Error().Msg("webhook dead letter replayed but audit record failed")
+		}
+	}
+	api.JSON(w, http.StatusAccepted, dl)
+}
+
+func writeDeadLetterError(w http.ResponseWriter, err error) {
+	if errors.Is(err, domain.ErrDeadLetterNotFound) {
+		api.Error(w, http.StatusNotFound, "DEAD_LETTER_NOT_FOUND", "webhook dead letter not found")
+		return
+	}
+	if errors.Is(err, domain.ErrDeadLetterEndpointUnusable) {
+		api.Error(w, http.StatusConflict, "DEAD_LETTER_ENDPOINT_UNAVAILABLE", "the original webhook endpoint is not available for replay")
+		return
+	}
+	if errors.Is(err, domain.ErrForbidden) {
+		api.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "tenant required")
+		return
+	}
+	api.InternalError(w, err)
 }
 
 func (h *Handler) GetSigningSecret(w http.ResponseWriter, r *http.Request) {
