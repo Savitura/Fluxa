@@ -180,7 +180,7 @@ func main() {
 	authSvc := auth.NewService(repoDB, userRepo, tenantRepo, orgRepo, apiKeyRepo, webhookRepo, refreshTokenRepo, jwtSecretBytes)
 	orgSvc := org.NewService(repoDB, orgRepo, userRepo, tenantRepo, jwtSecretBytes)
 
-	feeSvc := fees.NewService(feeRepo)
+	feeSvc := fees.NewEstimatorService(feeRepo, fees.NewHorizonNetworkFeeSource(cfg.StellarHorizonURL, fees.DefaultBaseFeeStroops))
 	walletSvc := wallet.NewServiceWithNetwork(walletRepo, stellarClient, cfg.MasterEncryptionKey, cfg.StellarLiveNetwork, tenantRepo).
 		WithSigner(signer).
 		WithClientResolver(clientResolver).

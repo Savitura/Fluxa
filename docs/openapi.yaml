@@ -1869,6 +1869,53 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /v1/fees/estimate:
+    post:
+      operationId: estimateNetworkFee
+      summary: Preflight network-fee estimation
+      description: Estimates the platform and Stellar network fees for a transfer or a batch before submitting it. Network fees are always denominated in XLM and account for the current base fee (surge pricing included) and the operation count. No funds are moved.
+      tags:
+      - Fees
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - type
+              - asset
+              - amount
+              properties:
+                type:
+                  type: string
+                  enum:
+                  - transfer
+                  - batch
+                asset:
+                  type: string
+                amount:
+                  type: string
+                  description: Total gross amount across all destinations
+                destinations:
+                  type: integer
+                  minimum: 1
+                  description: Required for type=batch; each destination is one payment operation
+      responses:
+        '200':
+          description: Preflight estimate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkFeeEstimate'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /v1/fees/preview:
     post:
       operationId: previewFee
@@ -4077,6 +4124,42 @@ components:
           format: date-time
           nullable: true
         created_at:
+          type: string
+          format: date-time
+    NetworkFeeEstimate:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - transfer
+          - batch
+        asset:
+          type: string
+        gross_amount:
+          type: string
+        platform_fee:
+          type: string
+        platform_fee_bps:
+          type: integer
+        net_amount:
+          type: string
+        network_fee:
+          type: string
+          description: Stellar fee in XLM
+        network_fee_stroops:
+          type: integer
+        total_fee:
+          type: string
+        base_fee_stroops:
+          type: integer
+        operation_count:
+          type: integer
+        transaction_count:
+          type: integer
+        max_operations_per_transaction:
+          type: integer
+        expires_at:
           type: string
           format: date-time
     FeeScheduleResponse:

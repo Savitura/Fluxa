@@ -2,6 +2,7 @@ package fees
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -15,16 +16,25 @@ import (
 
 type Handler struct {
 	svc Service
+	// estimator is feature-detected so deployments and test doubles that only
+	// implement Service keep working; preflight is unavailable rather than
+	// panicking when the concrete service does not provide it.
+	estimator Estimator
 }
 
 func NewHandler(svc Service) *Handler {
-	return &Handler{svc: svc}
+	h := &Handler{svc: svc}
+	if estimator, ok := svc.(Estimator); ok {
+		h.estimator = estimator
+	}
+	return h
 }
 
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		r.Get("/", h.getSchedule)
 		r.Post("/preview", h.previewFee)
+		r.Post("/estimate", h.estimateFee)
 	}
 }
 
@@ -184,6 +194,55 @@ func (h *Handler) previewFee(w http.ResponseWriter, r *http.Request) {
 		NetAmount:   fee.NetAmount.StringFixed(7),
 		FeeBps:      fee.FeeBps,
 	})
+}
+
+type estimateReq struct {
+	Type         string `json:"type" validate:"required,oneof=transfer batch"`
+	Asset        string `json:"asset" validate:"required"`
+	Amount       string `json:"amount" validate:"required"`
+	Destinations int    `json:"destinations"`
+}
+
+// estimateFee is the preflight endpoint: it estimates the platform and network
+// fees for a transfer or a batch without moving any funds.
+func (h *Handler) estimateFee(w http.ResponseWriter, r *http.Request) {
+	if h.estimator == nil {
+		api.Error(w, http.StatusNotFound, "NOT_FOUND", "fee estimation unavailable")
+		return
+	}
+
+	var req estimateReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.BadRequest(w, "invalid request body")
+		return
+	}
+	if err := api.Validate(req); err != nil {
+		api.BadRequest(w, err.Error())
+		return
+	}
+
+	amount, err := decimal.NewFromString(req.Amount)
+	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
+		api.BadRequest(w, "amount must be a positive number")
+		return
+	}
+
+	tenantID := tenant.IDFromContext(r.Context())
+	estimate, err := h.estimator.Estimate(r.Context(), tenantID, EstimateRequest{
+		Type:         req.Type,
+		Asset:        req.Asset,
+		Amount:       amount,
+		Destinations: req.Destinations,
+	})
+	if err != nil {
+		if errors.Is(err, ErrInvalidEstimateRequest) {
+			api.BadRequest(w, err.Error())
+			return
+		}
+		api.HandleDomainError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, estimate)
 }
 
 func (h *Handler) listCollected(w http.ResponseWriter, r *http.Request) {

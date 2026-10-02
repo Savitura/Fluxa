@@ -10,11 +10,65 @@ import (
 )
 
 type service struct {
-	repo Repository
+	repo             Repository
+	networkFeeSource NetworkFeeSource
 }
 
 func NewService(repo Repository) Service {
-	return &service{repo: repo}
+	return &service{repo: repo, networkFeeSource: StaticNetworkFeeSource{}}
+}
+
+// NewEstimatorService builds a fee service that can answer preflight network
+// fee estimates using source. A nil source falls back to the protocol minimum,
+// so an estimate is always available.
+func NewEstimatorService(repo Repository, source NetworkFeeSource) Service {
+	if source == nil {
+		source = StaticNetworkFeeSource{}
+	}
+	return &service{repo: repo, networkFeeSource: source}
+}
+
+// Estimate returns a preflight breakdown for a transfer or batch: the platform
+// fee from the caller's schedule, the Stellar network fee at the current base
+// fee, and the operation/transaction counts that produced it.
+func (s *service) Estimate(ctx context.Context, tenantID string, req EstimateRequest) (*NetworkFeeEstimate, error) {
+	maxOps := DefaultMaxOperationsPerTransaction
+	normalized, operations, transactions, err := validateEstimateRequest(req, maxOps)
+	if err != nil {
+		return nil, err
+	}
+
+	baseFee := DefaultBaseFeeStroops
+	if s.networkFeeSource != nil {
+		if fetched, fetchErr := s.networkFeeSource.BaseFeeStroops(ctx); fetchErr == nil && fetched > 0 {
+			baseFee = fetched
+		}
+	}
+
+	platform, err := s.calculateFee(ctx, tenantID, normalized.Asset, normalized.Amount, true)
+	if err != nil {
+		return nil, err
+	}
+
+	networkFeeStroops := baseFee * int64(operations)
+	networkFee := decimal.NewFromInt(networkFeeStroops).Div(decimal.NewFromInt(StroopsPerUnit))
+
+	return &NetworkFeeEstimate{
+		Type:                        normalized.Type,
+		Asset:                       normalized.Asset,
+		GrossAmount:                 normalized.Amount.StringFixed(7),
+		PlatformFee:                 platform.FeeAmount.StringFixed(7),
+		PlatformFeeBps:              platform.FeeBps,
+		NetAmount:                   platform.NetAmount.StringFixed(7),
+		NetworkFee:                  networkFee.StringFixed(7),
+		NetworkFeeStroops:           networkFeeStroops,
+		TotalFee:                    platform.FeeAmount.Add(networkFee).StringFixed(7),
+		BaseFeeStroops:              baseFee,
+		OperationCount:              operations,
+		TransactionCount:            transactions,
+		MaxOperationsPerTransaction: maxOps,
+		ExpiresAt:                   time.Now().UTC().Add(estimateTTL),
+	}, nil
 }
 
 func (s *service) GetSchedule(ctx context.Context, tenantID string) (*domain.FeeSchedule, error) {
