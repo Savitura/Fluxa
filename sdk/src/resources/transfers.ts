@@ -6,6 +6,9 @@ import {
   ListTransactionsQuery,
   ListTransactionsResponse,
   BatchResponse,
+  ListBatchesQuery,
+  ListBatchesResponse,
+  BatchPreflightResponse,
 } from '../types';
 import { Page, createPage, paginate, paginateAll } from '../pagination';
 
@@ -116,6 +119,41 @@ export class TransfersResource {
     const res = await this.http.request<string>({
       method: 'GET',
       path: `/transfers/batch/${encodeURIComponent(batchId)}/export`,
+      signal: options?.signal,
+    });
+    return res.data;
+  }
+
+  /**
+   * Lists batch transfer history for the authenticated tenant.
+   * Supports cursor pagination, status filtering, and source-wallet filtering.
+   */
+  async listBatches(
+    query: ListBatchesQuery = {},
+    options?: RequestOptions,
+  ): Promise<ListBatchesResponse> {
+    const res = await this.http.request<ListBatchesResponse>({
+      method: 'GET',
+      path: '/transfers/batches',
+      query: query as Record<string, unknown>,
+      signal: options?.signal,
+    });
+    return res.data;
+  }
+
+  /**
+   * Validates a batch transfer request without submitting anything.
+   * Returns per-row results with estimated fees and net amounts.
+   * The request shape is identical to createBatch.
+   */
+  async validateBatch(
+    request: import('../types').CreateBatchRequest,
+    options?: RequestOptions,
+  ): Promise<BatchPreflightResponse> {
+    const res = await this.http.request<BatchPreflightResponse>({
+      method: 'POST',
+      path: '/transfers/batch/validate',
+      body: request,
       signal: options?.signal,
     });
     return res.data;

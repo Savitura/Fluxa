@@ -49,6 +49,14 @@ func (f *fakeService) ExportCSV(_ context.Context, id string) (string, error) {
 	return "", domain.ErrBatchNotFound
 }
 
+func (f *fakeService) ListBatches(_ context.Context, _ ListQuery) (*ListPage, error) {
+	return &ListPage{}, nil
+}
+
+func (f *fakeService) Preflight(_ context.Context, _ string, items []Item) (*PreflightResult, error) {
+	return &PreflightResult{TotalCount: len(items), ValidCount: len(items)}, nil
+}
+
 func (f *fakeService) hits() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

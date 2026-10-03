@@ -117,6 +117,60 @@ export interface BatchResponse {
   transfers?: BatchTransferResponse[];
 }
 
+// ── Batch history & preflight ──────────────────────────────────────────────
+
+export interface ListBatchSummary {
+  total: number;
+  by_status: Record<string, number>;
+}
+
+export interface ListBatchesQuery {
+  status?: BatchStatus;
+  from_wallet?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListBatchCursor {
+  created_at: string;
+  id: string;
+}
+
+export interface ListBatchesResponse {
+  batches: Array<{
+    id: string;
+    status: BatchStatus;
+    total_count: number;
+    created_at: string;
+    updated_at: string;
+  }>;
+  next_cursor?: ListBatchCursor | null;
+  summary?: ListBatchSummary;
+}
+
+export interface BatchRowResult {
+  row: number;
+  to_wallet_id: string;
+  asset: string;
+  amount: string;
+  reference?: string;
+  valid: boolean;
+  error_code?: string;
+  error_field?: string;
+  error_message?: string;
+  estimated_fee?: string;
+  net_amount?: string;
+}
+
+export interface BatchPreflightResponse {
+  total_count: number;
+  valid_count: number;
+  invalid_count: number;
+  estimated_fees: string;
+  total_net_amount: string;
+  rows: BatchRowResult[];
+}
+
 // ── FX ──────────────────────────────────────────────────────────────────────
 
 export interface QuoteRequest {
