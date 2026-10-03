@@ -1065,6 +1065,99 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /v1/transfers/batch/validate:
+    post:
+      operationId: validateBatch
+      summary: Preflight-validate a batch transfer
+      description: 'Validates a batch transfer request without submitting anything.
+
+        Accepts the same request shape as createBatch and returns per-row
+
+        results with estimated fees and net amounts. No writes occur.
+        '
+      tags:
+      - Transfers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBatchRequest'
+            example:
+              from_wallet_id: w_1a2b3c4d
+              transfers:
+              - to_wallet_id: w_5e6f7g8h
+                asset: USDC
+                amount: '50.0000000'
+                reference: payroll-jan
+      responses:
+        '200':
+          description: Per-row validation results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchPreflightResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /v1/transfers/batches:
+    get:
+      operationId: listBatches
+      summary: List batch transfer history
+      description: 'Returns one page of batches for the authenticated tenant,
+
+        newest first. Supports cursor pagination, status filtering, and
+
+        source-wallet filtering. The response includes a summary of batch
+
+        counts by status for the current page.
+        '
+      tags:
+      - Transfers
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [pending, processing, partial, completed, failed, compliance_hold]
+        description: Filter by batch status
+      - name: from_wallet
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by source wallet (via linked transactions)
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 20
+          maximum: 100
+        description: Page size
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Opaque keyset cursor from a previous page''s next_cursor
+      responses:
+        '200':
+          description: One page of batch history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBatchesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /v1/fiat/quote:
     post:
       operationId: previewFiat
@@ -3640,6 +3733,99 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/BatchTransferItem'
+    BatchPreflightResponse:
+      type: object
+      properties:
+        total_count:
+          type: integer
+        valid_count:
+          type: integer
+        invalid_count:
+          type: integer
+        estimated_fees:
+          type: string
+          description: Sum of estimated fees across all rows
+        total_net_amount:
+          type: string
+          description: Sum of net amounts across valid rows
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              row:
+                type: integer
+              to_wallet_id:
+                type: string
+              asset:
+                type: string
+              amount:
+                type: string
+              reference:
+                type: string
+                nullable: true
+              valid:
+                type: boolean
+              error_code:
+                type: string
+                nullable: true
+              error_field:
+                type: string
+                nullable: true
+              error_message:
+                type: string
+                nullable: true
+              estimated_fee:
+                type: string
+                nullable: true
+              net_amount:
+                type: string
+                nullable: true
+    ListBatchesResponse:
+      type: object
+      properties:
+        batches:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              status:
+                type: string
+                enum:
+                - pending
+                - processing
+                - partial
+                - completed
+                - failed
+                - compliance_hold
+              total_count:
+                type: integer
+              created_at:
+                type: string
+                format: date-time
+              updated_at:
+                type: string
+                format: date-time
+        next_cursor:
+          type: object
+          nullable: true
+          properties:
+            created_at:
+              type: string
+              format: date-time
+            id:
+              type: string
+        summary:
+          type: object
+          properties:
+            total:
+              type: integer
+            by_status:
+              type: object
+              additionalProperties:
+                type: integer
     BatchTransferItem:
       type: object
       properties:

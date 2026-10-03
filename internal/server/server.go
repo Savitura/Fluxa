@@ -267,6 +267,7 @@ func New(
 				}
 				r.With(RequireResourceScope(domain.ScopeTransfersRead, domain.ScopeTransfersWrite)).Route("/transfers", transferHandler.Routes())
 				r.With(RequireResourceScope(domain.ScopeBatchesRead, domain.ScopeBatchesWrite)).Route("/transfers/batch", batchHandler.Routes())
+				r.With(RequireResourceScope(domain.ScopeBatchesRead, domain.ScopeBatchesWrite)).Route("/transfers/batches", batchHandler.ListRoutes())
 				r.With(RequireScope(domain.ScopeTransfersRead)).Route("/transactions", transferHandler.TransactionRoutes())
 				r.Route("/schedules", scheduleHandler.Routes(
 					RequireScope(domain.ScopeTransfersRead),

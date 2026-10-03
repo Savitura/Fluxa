@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/fluxa/fluxa/internal/api"
@@ -37,7 +38,8 @@ func (h *Handler) WithAssetValidator(fn func(code string) bool) *Handler {
 	return h
 }
 
-// Routes is mounted at /v1/transfers/batch.
+// Routes is mounted at /v1/transfers/batch (create/get/export) and
+// /v1/transfers/batches (list).
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		post := r.Post
@@ -45,8 +47,16 @@ func (h *Handler) Routes() func(r chi.Router) {
 			post = r.With(h.idem).Post
 		}
 		post("/", h.createBatch)
+		post("/validate", h.validateBatch)
 		r.Get("/{batchId}", h.getBatch)
 		r.Get("/{batchId}/export", h.exportBatch)
+	}
+}
+
+// ListRoutes is mounted at /v1/transfers/batches for history listing.
+func (h *Handler) ListRoutes() func(r chi.Router) {
+	return func(r chi.Router) {
+		r.Get("/", h.listBatches)
 	}
 }
 
@@ -92,6 +102,32 @@ type batchResponse struct {
 	CreatedAt        string                  `json:"created_at"`
 	Transfers        []batchTransferResponse `json:"transfers,omitempty"`
 	ValidationErrors []ValidationError       `json:"validation_errors,omitempty"`
+}
+
+// listBatchResponse is one batch summary row in a history listing.
+type listBatchResponse struct {
+	ID          string `json:"id"`
+	Status      string `json:"status"`
+	TotalCount  int    `json:"total_count"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// listBatchesResponse is the GET /v1/transfers/batches envelope.
+type listBatchesResponse struct {
+	Batches    []listBatchResponse `json:"batches"`
+	NextCursor *listCursorResponse `json:"next_cursor,omitempty"`
+	Summary    *batchSummary       `json:"summary,omitempty"`
+}
+
+type listCursorResponse struct {
+	CreatedAt string `json:"created_at"`
+	ID        string `json:"id"`
+}
+
+type batchSummary struct {
+	Total       int            `json:"total"`
+	ByStatus    map[string]int `json:"by_status"`
 }
 
 func toBatchResponse(result *Result) batchResponse {
@@ -192,6 +228,72 @@ func (h *Handler) createBatch(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusAccepted, toBatchResponse(result))
 }
 
+// validateBatch is the no-write preflight endpoint (POST /validate). It
+// accepts the same request shape as createBatch and returns per-row results
+// without persisting a batch or submitting transfers.
+func (h *Handler) validateBatch(w http.ResponseWriter, r *http.Request) {
+	var req createBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.BadRequest(w, "invalid request body")
+		return
+	}
+	if err := api.Validate(req); err != nil {
+		api.BadRequest(w, err.Error())
+		return
+	}
+
+	items := make([]Item, len(req.Transfers))
+	for i, t := range req.Transfers {
+		amount, err := decimal.NewFromString(t.Amount)
+		if err != nil || amount.LessThanOrEqual(decimal.Zero) {
+			// Let the service produce the row-level error; pass zero amount
+			// so validateItems records invalid_amount with the original text.
+			amount = decimal.Zero
+			_ = t
+		}
+		if h.assetIsSupported != nil && !h.assetIsSupported(t.Asset) {
+			// Mark unsupported asset by clearing Asset so validateItems
+			// records the error; keep the original in Reference for context.
+			_ = t
+		}
+		items[i] = Item{
+			ToWalletID: t.ToWalletID,
+			Asset:      t.Asset,
+			Amount:     amount,
+			Reference:  t.Reference,
+		}
+		// Re-check asset support here so the row result carries the reason.
+		if h.assetIsSupported != nil && !h.assetIsSupported(t.Asset) {
+			items[i].Asset = ""
+			// Stash the original asset in Reference's prefix so the response
+			// still shows what was requested.
+			if items[i].Reference != "" {
+				items[i].Reference = t.Asset + ":" + items[i].Reference
+			} else {
+				items[i].Reference = t.Asset
+			}
+		}
+	}
+
+	result, err := h.svc.Preflight(r.Context(), req.FromWalletID, items)
+	if err != nil {
+		api.HandleDomainError(w, err)
+		return
+	}
+
+	// Overwrite Asset/Amount/Reference on rows with the original request
+	// values so the response mirrors what the client sent.
+	for i, t := range req.Transfers {
+		if i < len(result.Rows) {
+			result.Rows[i].Asset = t.Asset
+			result.Rows[i].Amount = t.Amount
+			result.Rows[i].Reference = t.Reference
+		}
+	}
+
+	api.JSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) getBatch(w http.ResponseWriter, r *http.Request) {
 	batchID := chi.URLParam(r, "batchId")
 	result, err := h.svc.GetBatch(r.Context(), batchID)
@@ -214,4 +316,93 @@ func (h *Handler) exportBatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="batch-`+batchID+`.csv"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(csv))
+}
+
+// listBatches handles GET /v1/transfers/batches. Query parameters:
+//
+//	status      – filter by batch status
+//	from_wallet – filter by source wallet (via linked transactions)
+//	limit       – page size (default 20, max 100)
+//	cursor      – opaque keyset from a previous page's next_cursor
+func (h *Handler) listBatches(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	limit := 0
+	if s := q.Get("limit"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 0 {
+			api.BadRequest(w, "limit must be a non-negative integer")
+			return
+		}
+		limit = n
+	}
+
+	var afterCursor *ListCursor
+	if c := q.Get("cursor"); c != "" {
+		// Cursor format: RFC3339 timestamp + "|" + batch id
+		parts := splitCursor(c)
+		if parts == nil {
+			api.BadRequest(w, "invalid cursor")
+			return
+		}
+		ts, err := time.Parse(time.RFC3339, parts[0])
+		if err != nil {
+			api.BadRequest(w, "invalid cursor timestamp")
+			return
+		}
+		afterCursor = &ListCursor{CreatedAt: ts, ID: parts[1]}
+	}
+
+	query := ListQuery{
+		Status:      domain.BatchStatus(q.Get("status")),
+		FromWallet:  q.Get("from_wallet"),
+		AfterCursor: afterCursor,
+		Limit:       limit,
+	}
+
+	page, err := h.svc.ListBatches(r.Context(), query)
+	if err != nil {
+		api.HandleDomainError(w, err)
+		return
+	}
+
+	resp := listBatchesResponse{
+		Batches: make([]listBatchResponse, len(page.Batches)),
+		Summary: &batchSummary{
+			ByStatus: map[string]int{},
+		},
+	}
+	for i, b := range page.Batches {
+		resp.Batches[i] = listBatchResponse{
+			ID:         b.ID,
+			Status:     string(b.Status),
+			TotalCount: b.TotalCount,
+			CreatedAt:  b.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:  b.UpdatedAt.Format(time.RFC3339),
+		}
+		resp.Summary.Total++
+		resp.Summary.ByStatus[string(b.Status)]++
+	}
+	if page.NextCursor != nil {
+		resp.NextCursor = &listCursorResponse{
+			CreatedAt: page.NextCursor.CreatedAt.Format(time.RFC3339),
+			ID:        page.NextCursor.ID,
+		}
+	}
+
+	api.JSON(w, http.StatusOK, resp)
+}
+
+// splitCursor splits an opaque "timestamp|id" cursor. Returns nil when the
+// cursor does not have exactly two parts.
+func splitCursor(c string) []string {
+	for i := 0; i < len(c); i++ {
+		if c[i] == '|' {
+			if i == 0 || i == len(c)-1 {
+				return nil
+			}
+			return []string{c[:i], c[i+1:]}
+		}
+	}
+	return nil
 }

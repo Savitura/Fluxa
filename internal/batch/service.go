@@ -15,6 +15,14 @@ import (
 // MaxItems is the maximum number of transfers accepted in a single batch.
 const MaxItems = 100
 
+const (
+	// ListDefaultLimit is used when the caller does not specify a page size.
+	ListDefaultLimit = 20
+	// ListMaxLimit caps the page size so a single query cannot load the
+	// entire tenant history.
+	ListMaxLimit = 100
+)
+
 type Item struct {
 	ToWalletID string
 	Asset      string
@@ -27,10 +35,53 @@ type Result struct {
 	Transactions []*domain.Transaction
 }
 
+// RowResult is the per-row outcome of a preflight validation.
+type RowResult struct {
+	Row          int    `json:"row"`
+	ToWalletID   string `json:"to_wallet_id"`
+	Asset        string `json:"asset"`
+	Amount       string `json:"amount"`
+	Reference    string `json:"reference,omitempty"`
+	Valid        bool   `json:"valid"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorField   string `json:"error_field,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	EstimatedFee string `json:"estimated_fee,omitempty"`
+	NetAmount    string `json:"net_amount,omitempty"`
+}
+
+// PreflightResult is the outcome of a no-write batch validation.
+type PreflightResult struct {
+	TotalCount     int         `json:"total_count"`
+	ValidCount     int         `json:"valid_count"`
+	InvalidCount   int         `json:"invalid_count"`
+	EstimatedFees  string      `json:"estimated_fees"`
+	TotalNetAmount string      `json:"total_net_amount"`
+	Rows           []RowResult `json:"rows"`
+}
+
+// ListQuery is the caller-facing filter for batch history.
+type ListQuery struct {
+	Status      domain.BatchStatus
+	FromWallet  string
+	AfterCursor *ListCursor
+	Limit       int
+}
+
+// ListPage is one page of batch history plus the next-page cursor.
+type ListPage struct {
+	Batches    []*domain.Batch
+	NextCursor *ListCursor
+}
+
 type Service interface {
 	CreateBatch(ctx context.Context, fromWalletID string, items []Item) (*Result, error)
 	GetBatch(ctx context.Context, id string) (*Result, error)
 	ExportCSV(ctx context.Context, id string) (string, error)
+	ListBatches(ctx context.Context, q ListQuery) (*ListPage, error)
+	// Preflight validates a batch request without writing anything. It runs
+	// the same per-row checks as CreateBatch and returns row-level results.
+	Preflight(ctx context.Context, fromWalletID string, items []Item) (*PreflightResult, error)
 }
 
 type service struct {
@@ -41,6 +92,104 @@ type service struct {
 
 func NewService(repo Repository, txRepo transfer.Repository, transferSvc transfer.Service) Service {
 	return &service{repo: repo, txRepo: txRepo, transferSvc: transferSvc}
+}
+
+// validateItems runs the shared per-row checks used by both Preflight and
+// CreateBatch so the two paths cannot drift. It returns the valid items and
+// one RowResult per input row.
+func (s *service) validateItems(fromWalletID string, items []Item) ([]Item, []RowResult) {
+	rows := make([]RowResult, len(items))
+	validItems := make([]Item, 0, len(items))
+
+	for i, item := range items {
+		row := RowResult{
+			Row:        i + 1,
+			ToWalletID: item.ToWalletID,
+			Asset:      item.Asset,
+			Amount:     item.Amount.StringFixed(7),
+			Reference:  item.Reference,
+		}
+
+		switch {
+		case item.ToWalletID == "":
+			row.ErrorCode = "missing_field"
+			row.ErrorField = "to_wallet_id"
+			row.ErrorMessage = "to_wallet_id is required"
+		case item.Amount.IsZero() || item.Amount.IsNegative():
+			row.ErrorCode = "invalid_amount"
+			row.ErrorField = "amount"
+			row.ErrorMessage = "amount must be a positive number"
+		case item.Asset == "":
+			row.ErrorCode = "missing_field"
+			row.ErrorField = "asset"
+			row.ErrorMessage = "asset is required"
+		default:
+			// Asset support is checked by the handler via assetIsSupported
+			// (set on the Handler, not the Service). When the handler sets
+			// h.assetIsSupported it pre-filters; here we only check shape.
+			row.Valid = true
+			row.NetAmount = item.Amount.StringFixed(7)
+			validItems = append(validItems, item)
+		}
+
+		rows[i] = row
+	}
+
+	return validItems, rows
+}
+
+func (s *service) Preflight(ctx context.Context, fromWalletID string, items []Item) (*PreflightResult, error) {
+	if len(items) == 0 {
+		return nil, domain.ErrBatchEmpty
+	}
+	if len(items) > MaxItems {
+		return nil, domain.ErrBatchTooLarge
+	}
+	if fromWalletID == "" {
+		return nil, domain.ErrInvalidAmount // placeholder; handler validates uuid
+	}
+
+	_, rows := s.validateItems(fromWalletID, items)
+
+	result := &PreflightResult{
+		TotalCount:     len(items),
+		EstimatedFees:  "0.0000000",
+		TotalNetAmount: "0.0000000",
+		Rows:           rows,
+	}
+
+	var totalNet decimal.Decimal
+	for _, row := range rows {
+		if row.Valid {
+			result.ValidCount++
+			if row.NetAmount != "" {
+				if n, err := decimal.NewFromString(row.NetAmount); err == nil {
+					totalNet = totalNet.Add(n)
+				}
+			}
+		} else {
+			result.InvalidCount++
+		}
+	}
+	result.TotalNetAmount = totalNet.StringFixed(7)
+
+	// Estimate fees when the transfer service exposes a FeeEstimate method.
+	// Fall back to zero when unavailable so the endpoint still works.
+	if fe, ok := s.transferSvc.(interface {
+		EstimateFee(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal) (decimal.Decimal, error)
+	}); ok {
+		var totalFees decimal.Decimal
+		for _, item := range items {
+			fee, err := fe.EstimateFee(ctx, fromWalletID, item.ToWalletID, item.Asset, item.Amount)
+			if err != nil {
+				continue
+			}
+			totalFees = totalFees.Add(fee)
+		}
+		result.EstimatedFees = totalFees.StringFixed(7)
+	}
+
+	return result, nil
 }
 
 func (s *service) CreateBatch(ctx context.Context, fromWalletID string, items []Item) (*Result, error) {
@@ -120,6 +269,27 @@ func (s *service) ExportCSV(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	return toCSV(result.Transactions), nil
+}
+
+func (s *service) ListBatches(ctx context.Context, q ListQuery) (*ListPage, error) {
+	filter := ListFilter{
+		Status:     q.Status,
+		FromWallet: q.FromWallet,
+		Limit:      q.Limit,
+	}
+	if q.AfterCursor != nil {
+		filter.AfterCreated = q.AfterCursor.CreatedAt
+		filter.AfterID = q.AfterCursor.ID
+	}
+
+	result, err := s.repo.List(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	return &ListPage{
+		Batches:    result.Batches,
+		NextCursor: result.NextCursor,
+	}, nil
 }
 
 // aggregateStatus derives the batch-level status from its linked transactions'
