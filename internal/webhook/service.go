@@ -1156,8 +1156,10 @@ func (s *service) attemptConfigDelivery(ctx context.Context, config *domain.Tena
 		fail(fmt.Errorf("build webhook request: %w", err))
 		return
 	}
+	timestamp := fmt.Sprintf("%d", now.Unix())
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Fluxa-Signature", signBody(config.Secret, delivery.Payload))
+	req.Header.Set("X-Fluxa-Timestamp", timestamp)
 	if delivery.SigningKeyID != "" {
 		req.Header.Set("X-Fluxa-Key-ID", delivery.SigningKeyID)
 	}

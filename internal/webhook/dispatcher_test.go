@@ -121,19 +121,28 @@ func TestDispatcher_SSRFAndAsync(t *testing.T) {
 	svc := NewService(repo, redisClient, qClient, 120, false)
 	dispatcher := NewDispatcher(svc, qClient, nil)
 
-	ep, _, err := svc.RegisterEndpoint(context.Background(), "https://example.com/webhook", []string{"transfer.completed"})
+	ep, _, err := svc.RegisterEndpoint(context.Background(), "https://example.com/webhook", []string{domain.EventTransferSettled})
 	require.NoError(t, err)
 
-	err = dispatcher.Dispatch(context.Background(), "transfer.completed", map[string]string{"id": "tx_123"})
+	err = dispatcher.Dispatch(context.Background(), domain.EventTransferSettled, map[string]string{"id": "tx_123"})
 	assert.NoError(t, err)
 
-	// Test loopback URL rejection
-	loopbackEp, _, err := svc.RegisterEndpoint(context.Background(), "http://127.0.0.1/webhook", []string{"transfer.completed"})
-	require.NoError(t, err)
-	err = dispatcher.Dispatch(context.Background(), "transfer.completed", map[string]string{"id": "tx_123"})
+	// Test loopback URL rejection: inserting directly into repo bypasses registration
+	// validation, simulating a legacy endpoint added before SSRF checks. Dispatch
+	// should skip unsafe endpoints and not fail.
+	loopbackEp := &domain.WebhookEndpoint{
+		ID:        "loopback-ep",
+		URL:       "http://127.0.0.1/webhook",
+		Secret:    "whsec_test",
+		Events:    []string{domain.EventTransferSettled},
+		Active:    true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	_ = repo.CreateEndpoint(context.Background(), loopbackEp)
+	err = dispatcher.Dispatch(context.Background(), domain.EventTransferSettled, map[string]string{"id": "tx_123"})
 	assert.NoError(t, err) // Dispatch should skip unsafe endpoints and not fail
 
-	_ = loopbackEp
 	_ = ep
 }
 

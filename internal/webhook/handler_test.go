@@ -46,7 +46,7 @@ func TestRegisterEndpointSecretAndValidation(t *testing.T) {
 		"url":    "https://example.com/webhook",
 		"events": []string{"invalid.event"},
 	})
-	reqInvalid := httptest.NewRequest(http.MethodPost, "/v1/webhooks", bytes.NewReader(bodyInvalid))
+	reqInvalid := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(bodyInvalid))
 	reqInvalid.Header.Set("Content-Type", "application/json")
 	recInvalid := httptest.NewRecorder()
 	r.ServeHTTP(recInvalid, reqInvalid)
@@ -59,7 +59,7 @@ func TestRegisterEndpointSecretAndValidation(t *testing.T) {
 		"url":    "https://example.com/webhook",
 		"events": []string{domain.EventTransferSettled},
 	})
-	reqValid := httptest.NewRequest(http.MethodPost, "/v1/webhooks", bytes.NewReader(bodyValid))
+	reqValid := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(bodyValid))
 	reqValid.Header.Set("Content-Type", "application/json")
 	recValid := httptest.NewRecorder()
 	r.ServeHTTP(recValid, reqValid)
@@ -76,8 +76,8 @@ func TestRegisterEndpointSecretAndValidation(t *testing.T) {
 		t.Fatalf("expected non-empty secret on creation response")
 	}
 
-	// Test 3: Subsequent GET /v1/webhooks never returns the secret
-	reqGet := httptest.NewRequest(http.MethodGet, "/v1/webhooks", nil)
+	// Test 3: Subsequent GET never returns the secret
+	reqGet := httptest.NewRequest(http.MethodGet, "/", nil)
 	recGet := httptest.NewRecorder()
 	r.ServeHTTP(recGet, reqGet)
 	if recGet.Code != http.StatusOK {

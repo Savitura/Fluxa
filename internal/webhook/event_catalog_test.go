@@ -35,7 +35,7 @@ func TestListEventCatalogSearchesNameAndDescription(t *testing.T) {
 		query string
 		want  int
 	}{
-		{"transfer", 2},
+		{"transfer", 3}, // transfer.settled, transfer.failed, batch.completed (description mentions "transfers")
 		{"confirmed on Stellar", 1},
 		{"no-such-event", 0},
 	} {
