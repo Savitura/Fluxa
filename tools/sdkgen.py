@@ -118,9 +118,9 @@ def generate(spec: dict) -> tuple[str, str]:
             # Generate Python Literal type alias for enums
             enum_values = schema.get("enum", [])
             if schema.get("type") == "string":
-                py_enum = " | ".join(f'"{v}"' for v in enum_values)
+                py_enum = ", ".join(f'"{v}"' for v in enum_values)
             else:
-                py_enum = " | ".join(str(v) for v in enum_values)
+                py_enum = ", ".join(str(v) for v in enum_values)
             py_lines.append(f"{pascal(name)} = Literal[{py_enum}]")
             py_lines.append("")
             continue

@@ -165,7 +165,7 @@ class CreateKeyRequest(TypedDict, total=False):
     label: str | None
     scopes: list[APIKeyScope]
 
-APIKeyScope = Literal["*" | "admin" | "wallets:read" | "wallets:write" | "wallets:*" | "transfers:read" | "transfers:write" | "transfers:*" | "batches:read" | "batches:write" | "batches:*" | "webhooks:read" | "webhooks:write" | "webhooks:*" | "reports:read" | "reports:write" | "reports:*" | "keys:read" | "keys:write" | "keys:*" | "audit:read" | "audit:*" | "fiat:read" | "fiat:write" | "fiat:*" | "fx:read" | "fx:write" | "fx:*" | "fees:read" | "fees:*" | "beneficiaries:read" | "beneficiaries:write" | "beneficiaries:*" | "compliance:read" | "compliance:write" | "compliance:*"]
+APIKeyScope = Literal["*", "admin", "wallets:read", "wallets:write", "wallets:*", "transfers:read", "transfers:write", "transfers:*", "batches:read", "batches:write", "batches:*", "webhooks:read", "webhooks:write", "webhooks:*", "reports:read", "reports:write", "reports:*", "keys:read", "keys:write", "keys:*", "audit:read", "audit:*", "fiat:read", "fiat:write", "fiat:*", "fx:read", "fx:write", "fx:*", "fees:read", "fees:*", "beneficiaries:read", "beneficiaries:write", "beneficiaries:*", "compliance:read", "compliance:write", "compliance:*"]
 
 class APIKeyCreated(TypedDict, total=False):
     id: str
