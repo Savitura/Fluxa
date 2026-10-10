@@ -18,10 +18,19 @@ import (
 
 type testRepo struct {
 	records map[string]idempotency.Record
+	now     func() time.Time
 }
 
 func newTestRepo() *testRepo {
-	return &testRepo{records: make(map[string]idempotency.Record)}
+	return &testRepo{
+		records: make(map[string]idempotency.Record),
+		now:     func() time.Time { return time.Now().UTC() },
+	}
+}
+
+func (r *testRepo) withClock(now func() time.Time) *testRepo {
+	r.now = now
+	return r
 }
 
 func (r *testRepo) Acquire(_ context.Context, _ string, _ domain.Mode, _, _ string, _, _, _ time.Time, _ bool) (idempotency.Acquisition, error) {
@@ -42,13 +51,14 @@ func (r *testRepo) Lookup(_ context.Context, orgID string, mode domain.Mode, key
 	if !ok {
 		return idempotency.LookupResult{Found: false}, nil
 	}
-	if !rec.ExpiresAt.IsZero() && time.Now().After(rec.ExpiresAt) {
+	if !rec.ExpiresAt.IsZero() && r.now().After(rec.ExpiresAt) {
 		return idempotency.LookupResult{Found: false}, nil
 	}
 	return idempotency.LookupResult{Found: true, Record: rec}, nil
 }
 
-func setupTestRouter(repo idempotency.Repository, now time.Time) *chi.Mux {
+func setupTestRouter(repo *testRepo, now time.Time) *chi.Mux {
+	repo.withClock(func() time.Time { return now })
 	h := idempotency.NewHandler(repo).WithClock(func() time.Time { return now })
 	r := chi.NewRouter()
 	r.Route("/v1/idempotency", h.Routes())
