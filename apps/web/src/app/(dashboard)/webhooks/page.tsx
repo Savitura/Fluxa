@@ -69,7 +69,7 @@ export default function WebhooksPage() {
             loading: false,
           });
         }
-      })
+      });
     return () => {
       cancelled = true;
     };
@@ -192,7 +192,9 @@ export default function WebhooksPage() {
       <Card>
         <CardHeader>
           <CardTitle>Webhook event catalogue</CardTitle>
-          <CardDescription>Search supported events and inspect their example payloads.</CardDescription>
+          <CardDescription>
+            Search supported events and inspect their example payloads.
+          </CardDescription>
           <Input
             aria-label="Search webhook events"
             placeholder="Search by event name or description"
@@ -202,16 +204,24 @@ export default function WebhooksPage() {
         </CardHeader>
         <CardContent>
           {catalogLoading ? (
-            <p role="status" className="text-sm text-muted-foreground">Loading events…</p>
+            <p role="status" className="text-sm text-muted-foreground">
+              Loading events…
+            </p>
           ) : catalogError ? (
-            <p role="alert" className="text-sm text-destructive">{catalogError}</p>
+            <p role="alert" className="text-sm text-destructive">
+              {catalogError}
+            </p>
           ) : catalog.length === 0 ? (
-            <p role="status" className="text-sm text-muted-foreground">No matching webhook events.</p>
+            <p role="status" className="text-sm text-muted-foreground">
+              No matching webhook events.
+            </p>
           ) : (
             <div className="grid grid-cols-1 gap-3">
               {catalog.map((event) => (
                 <details key={event.name} className="rounded-lg border border-border p-4">
-                  <summary className="cursor-pointer font-mono text-sm font-medium">{event.name}</summary>
+                  <summary className="cursor-pointer font-mono text-sm font-medium">
+                    {event.name}
+                  </summary>
                   <p className="mt-2 text-sm text-muted-foreground">{event.description}</p>
                   <pre className="mt-3 overflow-x-auto rounded-md bg-muted p-3 text-xs">
                     <code>{JSON.stringify(event.example, null, 2)}</code>

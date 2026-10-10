@@ -66,5 +66,9 @@ export function TableCell({
   className?: string;
   colSpan?: number;
 }) {
-  return <td colSpan={colSpan} className={cn('p-4 align-middle', className)}>{children}</td>;
+  return (
+    <td colSpan={colSpan} className={cn('p-4 align-middle', className)}>
+      {children}
+    </td>
+  );
 }

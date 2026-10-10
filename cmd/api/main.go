@@ -361,7 +361,7 @@ func main() {
 			wallet.NewSorobanDeployer(sorobanClient, signer, cfg.ContractWalletWasmHash),
 			wallet.NewSACResolver(cfg.StellarNetwork, cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 			wallet.ContractWalletParams{
-				RecoveryThreshold:     uint32(recoveryQuota),  // #nosec G115 -- bounds-checked above
+				RecoveryThreshold:     uint32(recoveryQuota), // #nosec G115 -- bounds-checked above
 				SpendingLimit:         spendingLimit,
 				SpendingWindowSeconds: uint64(windowSeconds), // #nosec G115 -- bounds-checked above
 			},

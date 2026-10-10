@@ -39,8 +39,7 @@ export interface HttpResponse<T> {
 
 function buildQueryString(
   params?:
-    | Record<string, string | number | undefined>
-    | { [key: string]: string | number | undefined },
+    Record<string, string | number | undefined> | { [key: string]: string | number | undefined },
 ): string {
   if (!params) return '';
   const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null);
@@ -143,8 +142,7 @@ export class HttpClient {
 
     // Mutations are only retryable when they carry an idempotency key.
     // Otherwise a lost response could duplicate a financial operation.
-    const safeToRetry =
-      !mutating || Boolean(idempotencyKey) || Boolean(options.allowUnsafeRetry);
+    const safeToRetry = !mutating || Boolean(idempotencyKey) || Boolean(options.allowUnsafeRetry);
 
     let lastError: Error | undefined;
     let nextRetryDelay: number | undefined;
