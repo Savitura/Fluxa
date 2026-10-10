@@ -30,8 +30,8 @@ type DependencyStatus struct {
 
 type DependencyHistoryResponse struct {
 	Checks        []domain.DependencyHealthCheck `json:"checks"`
-	Limit         int                             `json:"limit"`
-	RetentionDays int                             `json:"retention_days"`
+	Limit         int                            `json:"limit"`
+	RetentionDays int                            `json:"retention_days"`
 }
 
 func (s *Service) WithDependencyHistory(repository DependencyHistoryRepository, expected []string) *Service {

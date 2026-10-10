@@ -48,14 +48,14 @@ func NewEngine(
 	feeWallet string,
 ) *Engine {
 	return &Engine{
-		txRepo:         txRepo,
-		walletRepo:     walletRepo,
-		feeSvc:         feeSvc,
-		stellar:        stellarClient,
-		signer:         signer,
-		network:        network,
-		assetIssuers:   assetIssuers,
-		feeWallet:      feeWallet,
+		txRepo:       txRepo,
+		walletRepo:   walletRepo,
+		feeSvc:       feeSvc,
+		stellar:      stellarClient,
+		signer:       signer,
+		network:      network,
+		assetIssuers: assetIssuers,
+		feeWallet:    feeWallet,
 	}
 }
 

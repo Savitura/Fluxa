@@ -10,7 +10,7 @@ import (
 
 type Handler struct {
 	service *Service
-	audit interface {
+	audit   interface {
 		Log(r *http.Request, action, resourceType, resourceID string, metadata map[string]interface{})
 	}
 }

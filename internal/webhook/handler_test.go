@@ -57,7 +57,7 @@ func TestRegisterEndpointSecretAndValidation(t *testing.T) {
 	// Test 2: Valid registration returns secret once
 	bodyValid, _ := json.Marshal(map[string]interface{}{
 		"url":    "https://example.com/webhook",
-		"events": []string{domain.EventTypePaymentCompleted},
+		"events": []string{domain.EventTransferSettled},
 	})
 	reqValid := httptest.NewRequest(http.MethodPost, "/v1/webhooks", bytes.NewReader(bodyValid))
 	reqValid.Header.Set("Content-Type", "application/json")

@@ -212,7 +212,7 @@ func (idx *Indexer) StreamAll(ctx context.Context) error {
 
 	var streamErr error
 	var selected, shardSkipped, syncOnly int
-	walletLoop:
+walletLoop:
 	for {
 		wallets, err := idx.walletRepo.List(ctx, limit, offset)
 		if err != nil {

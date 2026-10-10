@@ -21,9 +21,9 @@ const (
 	// stopped by screening. It is never enqueued for settlement; an approval
 	// must reset it to StatusPending first, because settlement.Engine
 	// silently no-ops on any status other than pending.
-	StatusComplianceHold TransactionStatus = "compliance_hold"
+	StatusComplianceHold  TransactionStatus = "compliance_hold"
 	StatusApprovalPending TransactionStatus = "approval_pending"
-	StatusCancelled      TransactionStatus = "cancelled"
+	StatusCancelled       TransactionStatus = "cancelled"
 
 	TypeTransfer   TransactionType = "transfer"
 	TypeConversion TransactionType = "conversion"

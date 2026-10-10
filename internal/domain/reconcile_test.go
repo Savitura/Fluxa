@@ -4,9 +4,9 @@ import "testing"
 
 func TestReconciliationDiscrepancyCategory(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		entry AuditLogEntry
-		want string
+		want  string
 	}{
 		{"not found", AuditLogEntry{Outcome: AuditNotFound}, DiscrepancyMissingOnChain},
 		{"duplicate", AuditLogEntry{Outcome: AuditMismatch, Details: "duplicate settlement operation"}, DiscrepancyDuplicateSettlement},

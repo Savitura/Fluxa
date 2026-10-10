@@ -1,7 +1,6 @@
 package webhook
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -49,30 +48,22 @@ func (d *Dispatcher) Dispatch(ctx context.Context, eventType string, payload int
 
 	now := time.Now().UTC()
 	for _, sub := range subs {
-		ep, err := d.svc.(*service).repo.GetEndpoint(ctx, sub.EndpointID)
-		if err != nil {
-			log.Error().Err(err).Str("endpoint_id", sub.EndpointID).Msg("webhook: failed to fetch endpoint for subscription")
-			continue
-		}
-
-		if ep.Paused {
-			continue
-		}
-
 		// Pre-validate the URL via SSRF guard before queueing
-		if err := d.svc.(*service).validateWebhookURL(ctx, ep.URL); err != nil {
-			log.Error().Err(err).Str("endpoint_url", ep.URL).Msg("webhook: skipping delivery to unsafe URL")
+		if err := d.svc.(*service).validateWebhookURL(ctx, sub.WebhookURL); err != nil {
+			log.Error().Err(err).Str("webhook_url", sub.WebhookURL).Msg("webhook: skipping delivery to unsafe URL")
 			continue
 		}
 
 		delivery := &domain.WebhookDelivery{
-			ID:         uuid.New().String(),
-			EndpointID: ep.ID,
-			EventType:  eventType,
-			Payload:    string(payloadBytes),
-			Status:     domain.DeliveryStatusPending,
-			Attempts:   0,
-			CreatedAt:  now,
+			ID:           uuid.New().String(),
+			EndpointID:   sub.ID,
+			EventType:    eventType,
+			Payload:      string(payloadBytes),
+			Status:       string(domain.DeliveryPending),
+			AttemptCount: 0,
+			MaxAttempts:  5,
+			CreatedAt:    now,
+			UpdatedAt:    now,
 		}
 
 		if err := d.svc.(*service).repo.CreateDelivery(ctx, delivery); err != nil {
@@ -80,7 +71,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, eventType string, payload int
 			continue
 		}
 
-		if err := d.queueClient.EnqueueWebhookDelivery(ctx, delivery.ID); err != nil {
+		if _, err := d.queueClient.EnqueueWebhookDelivery(ctx, delivery.ID); err != nil {
 			log.Error().Err(err).Str(
 				"delivery_id", delivery.ID,
 			).Msg("webhook: failed to enqueue delivery")
