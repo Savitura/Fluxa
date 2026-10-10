@@ -196,7 +196,7 @@ func (r *ComplianceRepo) ReplaceSanctionsEntities(ctx context.Context, entities 
 	results := tx.SendBatch(ctx, batch)
 	for range entities {
 		if _, err := results.Exec(); err != nil {
-			results.Close()
+			_ = results.Close()
 			return 0, fmt.Errorf("upsert sanctions entity: %w", err)
 		}
 	}

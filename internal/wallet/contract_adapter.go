@@ -325,7 +325,11 @@ func (a *ContractWalletAdapter) GetContractState(ctx context.Context, walletID s
 		return nil, err
 	}
 
-	state.TimeLocked = state.TimeLockUntil > uint64(time.Now().UTC().Unix())
+	nowUnix := time.Now().UTC().Unix()
+	if nowUnix < 0 {
+		nowUnix = 0
+	}
+	state.TimeLocked = state.TimeLockUntil > uint64(nowUnix) // #nosec G115 -- Unix time is always positive after 1970
 
 	return state, nil
 }

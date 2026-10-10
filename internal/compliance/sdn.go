@@ -62,7 +62,7 @@ func (s *HTTPSDNSource) Fetch(ctx context.Context) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("fetch sdn list: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("fetch sdn list: unexpected status %d", resp.StatusCode)
 	}
 	return resp.Body, nil

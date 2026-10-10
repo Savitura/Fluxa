@@ -85,7 +85,7 @@ func (c *Client) Send(ctx context.Context, level Level, title, message string) {
 		log.Error().Err(err).Msg("alerting: send request")
 		return
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		log.Error().Int("status", resp.StatusCode).Msg("alerting: webhook returned error")

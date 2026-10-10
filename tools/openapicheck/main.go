@@ -125,7 +125,7 @@ type Document struct {
 }
 
 func load(path string) (*Document, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- CLI tool, path comes from command-line flags
 	if err != nil {
 		return nil, err
 	}

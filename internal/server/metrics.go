@@ -84,7 +84,7 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 
 func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(globalMetrics.Snapshot())
+	_ = json.NewEncoder(w).Encode(globalMetrics.Snapshot())
 }
 
 type statusWriter struct {

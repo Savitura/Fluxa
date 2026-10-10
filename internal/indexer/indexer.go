@@ -138,7 +138,7 @@ func (idx *Indexer) SyncWallet(ctx context.Context, w *domain.Wallet) error {
 
 	cursor := w.SyncCursor
 	for {
-		ops, err := stellar.PaymentsWithContext(ctx, idx.stellar, w.PublicKey, cursor, uint(idx.config.PaymentsPageLimit))
+		ops, err := stellar.PaymentsWithContext(ctx, idx.stellar, w.PublicKey, cursor, uint(idx.config.PaymentsPageLimit)) // #nosec G115 -- validated positive in NewWithConfig
 		if err != nil {
 			return fmt.Errorf("fetch payments since cursor %q: %w", cursor, err)
 		}
@@ -262,7 +262,7 @@ walletLoop:
 func (idx *Indexer) streamShard(walletID string) int {
 	hash := fnv.New32a()
 	_, _ = hash.Write([]byte(walletID))
-	return int(hash.Sum32() % uint32(idx.config.StreamShardCount))
+	return int(hash.Sum32() % uint32(idx.config.StreamShardCount)) // #nosec G115 -- validated positive in NewWithConfig
 }
 
 func (idx *Indexer) ActiveStreams() int64 {
@@ -322,7 +322,7 @@ func (idx *Indexer) StreamWallet(ctx context.Context, w *domain.Wallet) {
 		}
 		if !retryAfterHonored && backoff > 0 {
 			jitterRange := backoff / 2
-			retryDelay = backoff - jitterRange + time.Duration(rand.Int63n(int64(jitterRange+1)))
+			retryDelay = backoff - jitterRange + time.Duration(rand.Int63n(int64(jitterRange+1))) // #nosec G404 -- jitter for backoff, not security-sensitive
 		}
 		if err != nil {
 			entry := log.Error().Err(err).Str("wallet_id", w.ID).Dur("retry_in", retryDelay)

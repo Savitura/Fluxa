@@ -347,15 +347,23 @@ func main() {
 		if err != nil {
 			log.Fatal().Err(err).Msg("parse CONTRACT_WALLET_SPENDING_LIMIT")
 		}
+		recoveryQuota := cfg.ContractWalletRecoveryQuota
+		if recoveryQuota < 0 {
+			log.Fatal().Msg("CONTRACT_WALLET_RECOVERY_THRESHOLD must not be negative")
+		}
+		windowSeconds := cfg.ContractWalletWindowSeconds
+		if windowSeconds < 0 {
+			log.Fatal().Msg("CONTRACT_WALLET_WINDOW_SECONDS must not be negative")
+		}
 		contractSvc := wallet.NewContractWalletAdapter(
 			walletRepo,
 			sorobanClient,
 			wallet.NewSorobanDeployer(sorobanClient, signer, cfg.ContractWalletWasmHash),
 			wallet.NewSACResolver(cfg.StellarNetwork, cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 			wallet.ContractWalletParams{
-				RecoveryThreshold:     uint32(cfg.ContractWalletRecoveryQuota),
+				RecoveryThreshold:     uint32(recoveryQuota),  // #nosec G115 -- bounds-checked above
 				SpendingLimit:         spendingLimit,
-				SpendingWindowSeconds: uint64(cfg.ContractWalletWindowSeconds),
+				SpendingWindowSeconds: uint64(windowSeconds), // #nosec G115 -- bounds-checked above
 			},
 		).WithTenantRepo(tenantRepo)
 		contractSvc.WithSigner(signer)

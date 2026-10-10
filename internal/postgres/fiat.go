@@ -124,7 +124,7 @@ func (r *FiatRepo) GetDepositByReference(ctx context.Context, ref string) (*doma
 		}
 		return nil, err
 	}
-	json.Unmarshal(instructionsJSON, &d.Instructions)
+	_ = json.Unmarshal(instructionsJSON, &d.Instructions)
 	return &d, nil
 }
 
@@ -145,7 +145,7 @@ func (r *FiatRepo) GetDepositByID(ctx context.Context, id string) (*domain.FiatD
 		}
 		return nil, err
 	}
-	json.Unmarshal(instructionsJSON, &d.Instructions)
+	_ = json.Unmarshal(instructionsJSON, &d.Instructions)
 	return &d, nil
 }
 
