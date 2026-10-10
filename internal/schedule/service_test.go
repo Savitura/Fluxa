@@ -184,14 +184,16 @@ func TestUpdate_ResumeSkipsElapsedOccurrences(t *testing.T) {
 	svc := NewService(repo, newFakeWalletRepo("from-1", "to-1"))
 
 	// Started three weeks ago and paused immediately, so several weekly
-	// occurrences have elapsed while paused.
+	// occurrences have elapsed while paused. MissedRunPolicy=Skip means
+	// resumed schedules jump to the next future occurrence.
 	sch, _ := svc.Create(context.Background(), CreateInput{
-		FromWalletID: "from-1",
-		ToWalletID:   "to-1",
-		Asset:        "XLM",
-		Amount:       decimal.NewFromInt(10),
-		Frequency:    domain.FrequencyWeekly,
-		StartAt:      time.Now().UTC().Add(-21 * 24 * time.Hour),
+		FromWalletID:    "from-1",
+		ToWalletID:      "to-1",
+		Asset:           "XLM",
+		Amount:          decimal.NewFromInt(10),
+		Frequency:       domain.FrequencyWeekly,
+		MissedRunPolicy: domain.MissedRunPolicySkip,
+		StartAt:         time.Now().UTC().Add(-21 * 24 * time.Hour),
 	})
 	paused := domain.ScheduleStatusPaused
 	_, _ = svc.Update(context.Background(), sch.ID, UpdateInput{Status: &paused})
