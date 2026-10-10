@@ -86,6 +86,11 @@ def base_types(schema: dict) -> list[str]:
     return [part["$ref"].rsplit("/", 1)[-1] for part in schema.get("allOf", []) if "$ref" in part]
 
 
+def is_enum_schema(schema: dict) -> bool:
+    """Check if schema is a simple enum (not an object with properties)."""
+    return "enum" in schema and schema.get("type") in ("string", "integer")
+
+
 def generate(spec: dict) -> tuple[str, str]:
     schemas = spec["components"]["schemas"]
     digest = hashlib.sha256(SPEC.read_bytes()).hexdigest()
@@ -100,11 +105,26 @@ def generate(spec: dict) -> tuple[str, str]:
         f"# OpenAPI SHA256: {digest}",
         "from __future__ import annotations",
         "",
-        "from typing import Any, Required, TypedDict",
+        "from typing import Any, Literal, Required, TypedDict",
         "",
     ]
 
     for name, schema in schemas.items():
+        # Handle enum types differently from object types
+        if is_enum_schema(schema):
+            go_base_type = "string" if schema.get("type") == "string" else "int64"
+            go_lines.append(f"type {pascal(name)} {go_base_type}")
+            go_lines.append("")
+            # Generate Python Literal type alias for enums
+            enum_values = schema.get("enum", [])
+            if schema.get("type") == "string":
+                py_enum = " | ".join(f'"{v}"' for v in enum_values)
+            else:
+                py_enum = " | ".join(str(v) for v in enum_values)
+            py_lines.append(f"{pascal(name)} = Literal[{py_enum}]")
+            py_lines.append("")
+            continue
+
         base = base_types(schema)
         fields = properties(schema)
         required = required_properties(schema)

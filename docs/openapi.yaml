@@ -3594,6 +3594,29 @@ components:
         status:
           type: string
           enum: [pending, completed, failed]
+    CreateRefundRequest:
+      type: object
+      required:
+      - original_transaction_id
+      - amount
+      properties:
+        original_transaction_id:
+          type: string
+          description: ID of the original transaction to refund
+        amount:
+          type: string
+          description: Amount to refund (decimal string)
+        reason:
+          type: string
+          maxLength: 500
+          description: Optional reason for the refund
+    RefundsResponse:
+      type: object
+      properties:
+        refunds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Refund'
     PaymentLink:
       type: object
       properties:
@@ -3630,6 +3653,34 @@ components:
         expires_at:
           type: string
           format: date-time
+    CreatePaymentLinkRequest:
+      type: object
+      required:
+      - wallet_id
+      - amount
+      - currency
+      - expires_at
+      properties:
+        wallet_id:
+          type: string
+          description: Wallet to receive the payment
+        amount:
+          type: string
+          description: Payment amount (decimal string)
+        currency:
+          type: string
+          description: Currency code (e.g. USD, EUR)
+        expires_at:
+          type: string
+          format: date-time
+          description: When the link expires
+    PaymentLinksResponse:
+      type: object
+      properties:
+        payment_links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentLink'
     TransferApproval:
       type: object
       properties:
