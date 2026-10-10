@@ -1,6 +1,7 @@
 package flutterwave
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -8,15 +9,15 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-func chargeCompletedPayload(txRef, status string, amount string, currency string) string {
+func chargeCompletedPayload(status string, amount string) string {
 	return `{
 		"event": "charge.completed",
 		"data": {
 			"id": 285959875,
-			"tx_ref": "` + txRef + `",
+			"tx_ref": "REF-1",
 			"status": "` + status + `",
 			"amount": ` + amount + `,
-			"currency": "` + currency + `"
+			"currency": "NGN"
 		}
 	}`
 }
@@ -33,9 +34,9 @@ func headersWithSignature(sig string) http.Header {
 
 func TestHandleWebhook_ValidSignature_Accepted(t *testing.T) {
 	p := NewProvider("mock", "correct-secret-hash")
-	payload := chargeCompletedPayload("REF-1", "successful", "100", "NGN")
+	payload := chargeCompletedPayload("successful", "100")
 
-	evt, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("correct-secret-hash"))
+	evt, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("correct-secret-hash"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -52,11 +53,11 @@ func TestHandleWebhook_ValidSignature_Accepted(t *testing.T) {
 
 func TestHandleWebhook_TamperedSignature_Rejected(t *testing.T) {
 	p := NewProvider("mock", "correct-secret-hash")
-	payload := chargeCompletedPayload("REF-1", "successful", "100", "NGN")
+	payload := chargeCompletedPayload("successful", "100")
 
 	// An attacker who intercepted a legitimate payload but doesn't know the
 	// configured secret cannot forge a matching header.
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("attacker-guess"))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("attacker-guess"))
 	if err == nil {
 		t.Fatal("expected error for tampered/incorrect signature, got nil")
 	}
@@ -64,9 +65,9 @@ func TestHandleWebhook_TamperedSignature_Rejected(t *testing.T) {
 
 func TestHandleWebhook_MissingSignatureHeader_Rejected(t *testing.T) {
 	p := NewProvider("mock", "correct-secret-hash")
-	payload := chargeCompletedPayload("REF-1", "successful", "100", "NGN")
+	payload := chargeCompletedPayload("successful", "100")
 
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature(""))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature(""))
 	if err == nil {
 		t.Fatal("expected error for missing signature header, got nil")
 	}
@@ -81,9 +82,9 @@ func TestHandleWebhook_TamperedPayloadWithValidHeaderValue_StillRejected(t *test
 	// itself must still require the correct secret, which the attacker does
 	// not have.
 	p := NewProvider("mock", "correct-secret-hash")
-	tampered := chargeCompletedPayload("REF-1", "successful", "100000", "NGN")
+	tampered := chargeCompletedPayload("successful", "100000")
 
-	_, err := p.HandleWebhook(nil, []byte(tampered), headersWithSignature("wrong-secret"))
+	_, err := p.HandleWebhook(context.Background(), []byte(tampered), headersWithSignature("wrong-secret"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -93,9 +94,9 @@ func TestHandleWebhook_NoSecretConfigured_FailsClosed(t *testing.T) {
 	// An unconfigured webhook secret must never be treated as "verification
 	// disabled" outside of the explicit mock/dev bypass.
 	p := NewProvider("live-key", "")
-	payload := chargeCompletedPayload("REF-1", "successful", "100", "NGN")
+	payload := chargeCompletedPayload("successful", "100")
 
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("anything"))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("anything"))
 	if err == nil {
 		t.Fatal("expected error when no webhook secret is configured, got nil")
 	}
@@ -103,9 +104,9 @@ func TestHandleWebhook_NoSecretConfigured_FailsClosed(t *testing.T) {
 
 func TestHandleWebhook_MockSecret_BypassesSignatureCheck(t *testing.T) {
 	p := NewProvider("mock", "mock")
-	payload := chargeCompletedPayload("REF-1", "successful", "100", "NGN")
+	payload := chargeCompletedPayload("successful", "100")
 
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature(""))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature(""))
 	if err != nil {
 		t.Fatalf("mock mode should bypass signature verification, got error: %v", err)
 	}
@@ -115,9 +116,9 @@ func TestHandleWebhook_MockSecret_BypassesSignatureCheck(t *testing.T) {
 
 func TestHandleWebhook_SuccessfulStatus_MapsToCompleted(t *testing.T) {
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "successful", "100", "NGN")
+	payload := chargeCompletedPayload("successful", "100")
 
-	evt, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	evt, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,9 +129,9 @@ func TestHandleWebhook_SuccessfulStatus_MapsToCompleted(t *testing.T) {
 
 func TestHandleWebhook_FailedStatus_MapsToFailed(t *testing.T) {
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "failed", "100", "NGN")
+	payload := chargeCompletedPayload("failed", "100")
 
-	evt, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	evt, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,9 +146,9 @@ func TestHandleWebhook_PendingStatus_Rejected(t *testing.T) {
 	// that wasn't "successful" to "failed", which would have prematurely
 	// marked an in-flight deposit as failed.
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "pending", "100", "NGN")
+	payload := chargeCompletedPayload("pending", "100")
 
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err == nil {
 		t.Fatal("expected error for non-final status, got nil")
 	}
@@ -155,9 +156,9 @@ func TestHandleWebhook_PendingStatus_Rejected(t *testing.T) {
 
 func TestHandleWebhook_UnknownStatus_Rejected(t *testing.T) {
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "some-new-status-flutterwave-added", "100", "NGN")
+	payload := chargeCompletedPayload("some-new-status-flutterwave-added", "100")
 
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err == nil {
 		t.Fatal("expected error for unsupported status, got nil")
 	}
@@ -167,7 +168,7 @@ func TestHandleWebhook_MissingReference_Rejected(t *testing.T) {
 	p := NewProvider("mock", "secret")
 	payload := `{"event":"charge.completed","data":{"id":1,"status":"successful","amount":100,"currency":"NGN"}}`
 
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err == nil {
 		t.Fatal("expected error for missing reference, got nil")
 	}
@@ -183,14 +184,14 @@ func TestHandleWebhook_ReplayedPayload_ParsesIdenticallyBothTimes(t *testing.T) 
 	// keeps parsing to the same event deterministically, in particular the
 	// same EventID, so the caller has a stable identity to dedupe on.
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "successful", "100", "NGN")
+	payload := chargeCompletedPayload("successful", "100")
 	headers := headersWithSignature("secret")
 
-	first, err := p.HandleWebhook(nil, []byte(payload), headers)
+	first, err := p.HandleWebhook(context.Background(), []byte(payload), headers)
 	if err != nil {
 		t.Fatalf("unexpected error on first delivery: %v", err)
 	}
-	second, err := p.HandleWebhook(nil, []byte(payload), headers)
+	second, err := p.HandleWebhook(context.Background(), []byte(payload), headers)
 	if err != nil {
 		t.Fatalf("unexpected error on replayed delivery: %v", err)
 	}
@@ -202,9 +203,9 @@ func TestHandleWebhook_ReplayedPayload_ParsesIdenticallyBothTimes(t *testing.T) 
 
 func TestHandleWebhook_EventType(t *testing.T) {
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "successful", "100", "NGN")
+	payload := chargeCompletedPayload("successful", "100")
 
-	evt, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	evt, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,9 +221,9 @@ func TestHandleWebhook_FractionalAmount_ParsesExactly(t *testing.T) {
 	// 100.099999999999994, failing the exact-match check against the stored
 	// deposit. The raw literal must convert exactly.
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "successful", "100.10", "NGN")
+	payload := chargeCompletedPayload("successful", "100.10")
 
-	evt, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	evt, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -234,9 +235,9 @@ func TestHandleWebhook_FractionalAmount_ParsesExactly(t *testing.T) {
 
 func TestHandleWebhook_StringAmount_Accepted(t *testing.T) {
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "successful", `"100.10"`, "NGN")
+	payload := chargeCompletedPayload("successful", `"100.10"`)
 
-	evt, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	evt, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -247,9 +248,9 @@ func TestHandleWebhook_StringAmount_Accepted(t *testing.T) {
 
 func TestHandleWebhook_HighPrecisionWithinCap_Accepted(t *testing.T) {
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "successful", "10.123456", "NGN")
+	payload := chargeCompletedPayload("successful", "10.123456")
 
-	evt, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	evt, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -261,9 +262,9 @@ func TestHandleWebhook_HighPrecisionWithinCap_Accepted(t *testing.T) {
 func TestHandleWebhook_ScientificNotation_AcceptedExactly(t *testing.T) {
 	// Policy: scientific notation converts exactly (1e2 == 100).
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "successful", "1e2", "NGN")
+	payload := chargeCompletedPayload("successful", "1e2")
 
-	evt, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	evt, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -274,9 +275,9 @@ func TestHandleWebhook_ScientificNotation_AcceptedExactly(t *testing.T) {
 
 func TestHandleWebhook_OverPrecisionAmount_Rejected(t *testing.T) {
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "successful", "10.1234567", "NGN")
+	payload := chargeCompletedPayload("successful", "10.1234567")
 
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err == nil {
 		t.Fatal("expected error for over-precision amount, got nil")
 	}
@@ -284,9 +285,9 @@ func TestHandleWebhook_OverPrecisionAmount_Rejected(t *testing.T) {
 
 func TestHandleWebhook_NegativeAmount_Rejected(t *testing.T) {
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "successful", "-50", "NGN")
+	payload := chargeCompletedPayload("successful", "-50")
 
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err == nil {
 		t.Fatal("expected error for negative amount, got nil")
 	}
@@ -294,9 +295,9 @@ func TestHandleWebhook_NegativeAmount_Rejected(t *testing.T) {
 
 func TestHandleWebhook_ZeroAmount_Rejected(t *testing.T) {
 	p := NewProvider("mock", "secret")
-	payload := chargeCompletedPayload("REF-1", "successful", "0", "NGN")
+	payload := chargeCompletedPayload("successful", "0")
 
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err == nil {
 		t.Fatal("expected error for zero amount, got nil")
 	}
@@ -306,7 +307,7 @@ func TestHandleWebhook_MissingAmount_Rejected(t *testing.T) {
 	p := NewProvider("mock", "secret")
 	payload := `{"event":"charge.completed","data":{"id":1,"tx_ref":"REF-1","status":"successful","currency":"NGN"}}`
 
-	_, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret"))
+	_, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret"))
 	if err == nil {
 		t.Fatal("expected error for missing amount, got nil")
 	}
@@ -315,8 +316,8 @@ func TestHandleWebhook_MissingAmount_Rejected(t *testing.T) {
 func TestHandleWebhook_MalformedAmount_Rejected(t *testing.T) {
 	p := NewProvider("mock", "secret")
 	for _, amount := range []string{`"abc"`, `"12.34.56"`, `true`} {
-		payload := chargeCompletedPayload("REF-1", "successful", amount, "NGN")
-		if _, err := p.HandleWebhook(nil, []byte(payload), headersWithSignature("secret")); err == nil {
+		payload := chargeCompletedPayload("successful", amount)
+		if _, err := p.HandleWebhook(context.Background(), []byte(payload), headersWithSignature("secret")); err == nil {
 			t.Fatalf("expected error for malformed amount %s, got nil", amount)
 		}
 	}

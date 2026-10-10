@@ -22,7 +22,7 @@ func TestHealthHandlerReturnsOKWhenDependenciesPass(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
-	var body healthResponse
+	var body HealthResponse
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestHealthHandlerReturnsUnavailableWhenDependencyFails(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
 	}
 
-	var body healthResponse
+	var body HealthResponse
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/google/uuid"
 )
 
@@ -84,8 +85,8 @@ func TestService_Create(t *testing.T) {
 	t.Run("valid alert creation", func(t *testing.T) {
 		// Set tenant context
 		ctx := context.Background()
-		ctx = context.WithValue(ctx, "tenant_id", uuid.NewString())
-		ctx = context.WithValue(ctx, "mode", domain.ModeLive)
+		ctx = tenant.WithID(ctx, uuid.NewString())
+		ctx = tenant.WithMode(ctx, domain.ModeLive)
 
 		alert, err := svc.Create(ctx, "wallet-123", "USDC", "issuer-123", "100.00")
 		if err != nil {
@@ -107,7 +108,7 @@ func TestService_Create(t *testing.T) {
 
 	t.Run("invalid asset code", func(t *testing.T) {
 		ctx := context.Background()
-		ctx = context.WithValue(ctx, "tenant_id", uuid.NewString())
+		ctx = tenant.WithID(ctx, uuid.NewString())
 		_, err := svc.Create(ctx, "wallet-123", "", "issuer-123", "100.00")
 		if !errors.Is(err, ErrInvalidAsset) {
 			t.Errorf("expected ErrInvalidAsset, got %v", err)
@@ -116,7 +117,7 @@ func TestService_Create(t *testing.T) {
 
 	t.Run("invalid threshold", func(t *testing.T) {
 		ctx := context.Background()
-		ctx = context.WithValue(ctx, "tenant_id", uuid.NewString())
+		ctx = tenant.WithID(ctx, uuid.NewString())
 		_, err := svc.Create(ctx, "wallet-123", "USDC", "issuer-123", "-10.00")
 		if !errors.Is(err, ErrInvalidThreshold) {
 			t.Errorf("expected ErrInvalidThreshold, got %v", err)
@@ -125,7 +126,7 @@ func TestService_Create(t *testing.T) {
 
 	t.Run("duplicate alert", func(t *testing.T) {
 		ctx := context.Background()
-		ctx = context.WithValue(ctx, "tenant_id", uuid.NewString())
+		ctx = tenant.WithID(ctx, uuid.NewString())
 		repo.createErr = domain.ErrDuplicateAlert
 		_, err := svc.Create(ctx, "wallet-123", "USDC", "issuer-123", "100.00")
 		if !errors.Is(err, domain.ErrDuplicateAlert) {
@@ -142,8 +143,8 @@ func TestService_Update(t *testing.T) {
 
 	t.Run("update threshold", func(t *testing.T) {
 		ctx := context.Background()
-		ctx = context.WithValue(ctx, "tenant_id", uuid.NewString())
-		ctx = context.WithValue(ctx, "mode", domain.ModeLive)
+		ctx = tenant.WithID(ctx, uuid.NewString())
+		ctx = tenant.WithMode(ctx, domain.ModeLive)
 
 		// Create an alert first
 		alert, _ := svc.Create(ctx, "wallet-123", "USDC", "issuer-123", "100.00")
@@ -160,8 +161,8 @@ func TestService_Update(t *testing.T) {
 
 	t.Run("update status", func(t *testing.T) {
 		ctx := context.Background()
-		ctx = context.WithValue(ctx, "tenant_id", uuid.NewString())
-		ctx = context.WithValue(ctx, "mode", domain.ModeLive)
+		ctx = tenant.WithID(ctx, uuid.NewString())
+		ctx = tenant.WithMode(ctx, domain.ModeLive)
 
 		alert, _ := svc.Create(ctx, "wallet-456", "XLM", "", "50.00")
 
@@ -176,8 +177,8 @@ func TestService_Update(t *testing.T) {
 
 	t.Run("invalid threshold", func(t *testing.T) {
 		ctx := context.Background()
-		ctx = context.WithValue(ctx, "tenant_id", uuid.NewString())
-		ctx = context.WithValue(ctx, "mode", domain.ModeLive)
+		ctx = tenant.WithID(ctx, uuid.NewString())
+		ctx = tenant.WithMode(ctx, domain.ModeLive)
 
 		alert, _ := svc.Create(ctx, "wallet-789", "EURC", "issuer-456", "100.00")
 

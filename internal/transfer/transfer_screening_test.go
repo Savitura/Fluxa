@@ -30,7 +30,7 @@ func (m *screeningMockTxRepo) Create(_ context.Context, tx *domain.Transaction) 
 }
 
 func (m *screeningMockTxRepo) CreateWithMonthlyLimit(_ context.Context, tx *domain.Transaction, _ string, _ int, _ time.Month, _ int) error {
-	return m.Create(nil, tx)
+	return m.Create(context.Background(), tx)
 }
 
 // ClaimForSubmission mirrors the production guard: only a pending row can be

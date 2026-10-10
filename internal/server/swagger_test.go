@@ -91,7 +91,7 @@ func TestServeSwaggerUI_TrailingSlash(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/docs/", nil)
 	rec := httptest.NewRecorder()
 
-	serveSwaggerUI(rec, req)
+	ServeSwaggerUI(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)

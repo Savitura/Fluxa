@@ -48,10 +48,6 @@ func (m *mockTenantRepo) GetByID(ctx context.Context, id string) (*domain.Tenant
 	return m.tenant, nil
 }
 
-type mockStellar struct{}
-
-func (m *mockStellar) LoadAccount(pubKey string) (interface{}, error) { return nil, nil }
-
 func TestIndividualWalletLimit(t *testing.T) {
 	repo := &mockRepo{count: 5}
 	tRepo := &mockTenantRepo{

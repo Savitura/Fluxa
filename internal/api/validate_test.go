@@ -14,12 +14,6 @@ type testStructValid struct {
 	Age   int    `validate:"required,gte=18"`
 }
 
-type testStructInvalid struct {
-	Name  string
-	Email string
-	Age   int
-}
-
 func TestValidate_ValidStruct(t *testing.T) {
 	s := testStructValid{
 		Name:  "John Doe",

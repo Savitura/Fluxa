@@ -1,6 +1,7 @@
 package yellowcard
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,7 +14,7 @@ import (
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-func paymentCompletedPayload(id, ref, status, amount, currency string) string {
+func paymentCompletedPayload(id, ref, status, amount string) string {
 	return `{
 		"event": "payment.completed",
 		"data": {
@@ -22,7 +23,7 @@ func paymentCompletedPayload(id, ref, status, amount, currency string) string {
 			"type": "payment",
 			"status": "` + status + `",
 			"amount": "` + amount + `",
-			"currency": "` + currency + `"
+			"currency": "NGN"
 		}
 	}`
 }
@@ -57,10 +58,10 @@ func makeSignedHeaders(secret string, payload []byte) http.Header {
 
 func TestHandleWebhook_ValidHMAC_Accepted(t *testing.T) {
 	p := NewProvider("api-key", "webhook-secret", true)
-	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "completed", "5000", "NGN"))
+	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "completed", "5000"))
 	headers := makeSignedHeaders("webhook-secret", payload)
 
-	evt, err := p.HandleWebhook(nil, payload, headers)
+	evt, err := p.HandleWebhook(context.Background(), payload, headers)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,12 +72,12 @@ func TestHandleWebhook_ValidHMAC_Accepted(t *testing.T) {
 
 func TestHandleWebhook_InvalidHMAC_Rejected(t *testing.T) {
 	p := NewProvider("api-key", "webhook-secret", true)
-	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "completed", "5000", "NGN"))
+	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "completed", "5000"))
 
 	h := make(http.Header)
 	h.Set("x-yellowcard-signature", "deadbeefdeadbeef")
 
-	_, err := p.HandleWebhook(nil, payload, h)
+	_, err := p.HandleWebhook(context.Background(), payload, h)
 	if err == nil {
 		t.Fatal("expected error for invalid HMAC, got nil")
 	}
@@ -87,10 +88,10 @@ func TestHandleWebhook_NoWebhookKey_SkipsVerification(t *testing.T) {
 	// (matches the current production behaviour: an empty key means
 	// verification is disabled for that deployment).
 	p := NewProvider("api-key", "", true)
-	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "completed", "5000", "NGN"))
+	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "completed", "5000"))
 	headers := make(http.Header) // no signature header
 
-	_, err := p.HandleWebhook(nil, payload, headers)
+	_, err := p.HandleWebhook(context.Background(), payload, headers)
 	if err != nil {
 		t.Fatalf("expected success when webhookKey is empty, got: %v", err)
 	}
@@ -100,9 +101,9 @@ func TestHandleWebhook_NoWebhookKey_SkipsVerification(t *testing.T) {
 
 func TestHandleWebhook_PaymentCompleted_MapsToDepositConfirmed(t *testing.T) {
 	p := NewProvider("api-key", "", true)
-	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "completed", "5000", "NGN"))
+	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "completed", "5000"))
 
-	evt, err := p.HandleWebhook(nil, payload, make(http.Header))
+	evt, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -125,7 +126,7 @@ func TestHandleWebhook_PaymentFailed_MapsToDepositFailed(t *testing.T) {
 		}
 	}`)
 
-	evt, err := p.HandleWebhook(nil, payload, make(http.Header))
+	evt, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestHandleWebhook_PayoutCompleted_MapsToWithdrawalSent(t *testing.T) {
 	p := NewProvider("api-key", "", true)
 	payload := []byte(payoutCompletedPayload("yc-3", "REF-3", "completed", "5000", "NGN"))
 
-	evt, err := p.HandleWebhook(nil, payload, make(http.Header))
+	evt, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -161,7 +162,7 @@ func TestHandleWebhook_PayoutFailed_MapsToWithdrawalFailed(t *testing.T) {
 		}
 	}`)
 
-	evt, err := p.HandleWebhook(nil, payload, make(http.Header))
+	evt, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -176,9 +177,9 @@ func TestHandleWebhook_CompletedStatus_MapsToCompleted(t *testing.T) {
 	for _, status := range []string{"completed", "sent", "successful"} {
 		t.Run("status="+status, func(t *testing.T) {
 			p := NewProvider("api-key", "", true)
-			payload := []byte(paymentCompletedPayload("yc-1", "REF-1", status, "5000", "NGN"))
+			payload := []byte(paymentCompletedPayload("yc-1", "REF-1", status, "5000"))
 
-			evt, err := p.HandleWebhook(nil, payload, make(http.Header))
+			evt, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 			if err != nil {
 				t.Fatalf("unexpected error for status %q: %v", status, err)
 			}
@@ -193,9 +194,9 @@ func TestHandleWebhook_OtherStatus_MapsToFailed(t *testing.T) {
 	// Any status that is not completed/sent/successful maps to "failed" in
 	// the current Yellow Card implementation.
 	p := NewProvider("api-key", "", true)
-	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "rejected", "5000", "NGN"))
+	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "rejected", "5000"))
 
-	evt, err := p.HandleWebhook(nil, payload, make(http.Header))
+	evt, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -210,9 +211,9 @@ func TestHandleWebhook_ReferencePreferredOverID(t *testing.T) {
 	// When both "id" and "reference" are present, "reference" is the
 	// merchant-supplied value and should be used as ProviderRef.
 	p := NewProvider("api-key", "", true)
-	payload := []byte(paymentCompletedPayload("yc-id-123", "MERCHANT-REF-999", "completed", "5000", "NGN"))
+	payload := []byte(paymentCompletedPayload("yc-id-123", "MERCHANT-REF-999", "completed", "5000"))
 
-	evt, err := p.HandleWebhook(nil, payload, make(http.Header))
+	evt, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -235,7 +236,7 @@ func TestHandleWebhook_FallsBackToIDWhenReferenceEmpty(t *testing.T) {
 		}
 	}`)
 
-	evt, err := p.HandleWebhook(nil, payload, make(http.Header))
+	evt, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -249,9 +250,9 @@ func TestHandleWebhook_FallsBackToIDWhenReferenceEmpty(t *testing.T) {
 
 func TestHandleWebhook_Amount_ParsedExactly(t *testing.T) {
 	p := NewProvider("api-key", "", true)
-	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "completed", "1500.50", "NGN"))
+	payload := []byte(paymentCompletedPayload("yc-1", "REF-1", "completed", "1500.50"))
 
-	evt, err := p.HandleWebhook(nil, payload, make(http.Header))
+	evt, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -267,13 +268,13 @@ func TestHandleWebhook_ReplayedPayload_ParsesIdentically(t *testing.T) {
 	// Provider layer is stateless — the same payload must parse to the same
 	// event both times so the caller's event-ID deduplication can work.
 	p := NewProvider("api-key", "", true)
-	payload := []byte(paymentCompletedPayload("yc-evt-42", "REF-42", "completed", "5000", "NGN"))
+	payload := []byte(paymentCompletedPayload("yc-evt-42", "REF-42", "completed", "5000"))
 
-	first, err := p.HandleWebhook(nil, payload, make(http.Header))
+	first, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 	if err != nil {
 		t.Fatalf("unexpected error on first delivery: %v", err)
 	}
-	second, err := p.HandleWebhook(nil, payload, make(http.Header))
+	second, err := p.HandleWebhook(context.Background(), payload, make(http.Header))
 	if err != nil {
 		t.Fatalf("unexpected error on replayed delivery: %v", err)
 	}
@@ -288,7 +289,7 @@ func TestHandleWebhook_ReplayedPayload_ParsesIdentically(t *testing.T) {
 func TestHandleWebhook_MalformedJSON_Rejected(t *testing.T) {
 	p := NewProvider("api-key", "", true)
 
-	_, err := p.HandleWebhook(nil, []byte(`{not valid json`), make(http.Header))
+	_, err := p.HandleWebhook(context.Background(), []byte(`{not valid json`), make(http.Header))
 	if err == nil {
 		t.Fatal("expected error for malformed JSON, got nil")
 	}

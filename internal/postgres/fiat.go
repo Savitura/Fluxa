@@ -60,7 +60,7 @@ func (r *FiatRepo) UpdateDepositStatus(ctx context.Context, id, status string) e
 	if err != nil {
 		return fmt.Errorf("begin deposit status update: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	tag, err := tx.Exec(ctx, `UPDATE fiat_deposits SET status = $1 WHERE id = $2 AND status NOT IN ('completed', 'failed')`, status, id)
 	if err != nil {
 		return err

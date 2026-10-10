@@ -532,7 +532,7 @@ func (s *service) CancelTransfer(ctx context.Context, id, actor, idempotencyKey 
 		// Record audit log entry with the acting principal.
 		s.recordAudit(ctx, actor, "transfer.cancel", id)
 		// Dispatch webhook event for cancellation.
-		_ = s.dispatchCancelWebhook(ctx, id, actor)
+		s.dispatchCancelWebhook(ctx, id, actor)
 		// Return the updated transaction (idempotent: cancelling an already-cancelled
 		// transfer succeeds and just returns the current state).
 		return tx, nil
@@ -546,9 +546,8 @@ func (s *service) CancelTransfer(ctx context.Context, id, actor, idempotencyKey 
 	}
 }
 
-func (s *service) dispatchCancelWebhook(ctx context.Context, id, actor string) error {
+func (s *service) dispatchCancelWebhook(ctx context.Context, id, actor string) {
 	s.recordAudit(ctx, actor, "transfer.cancel", id)
-	return nil
 }
 
 func (s *service) ListTransactions(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error) {

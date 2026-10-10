@@ -57,8 +57,8 @@ func (f *fakeTxRepo) Create(ctx context.Context, tx *domain.Transaction) error {
 	return nil
 }
 
-func (f *fakeTxRepo) CreateWithMonthlyLimit(_ context.Context, tx *domain.Transaction, _ string, _ int, _ time.Month, _ int) error {
-	return f.Create(nil, tx)
+func (f *fakeTxRepo) CreateWithMonthlyLimit(ctx context.Context, tx *domain.Transaction, _ string, _ int, _ time.Month, _ int) error {
+	return f.Create(ctx, tx)
 }
 
 func (f *fakeTxRepo) GetByID(_ context.Context, id string) (*domain.Transaction, error) {

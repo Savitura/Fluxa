@@ -186,9 +186,9 @@ func (d *mockDispatcher) dispatched(want domain.EventType) bool {
 	return false
 }
 
-func heldTransaction(id string) *domain.Transaction {
+func heldTransaction() *domain.Transaction {
 	return &domain.Transaction{
-		ID:     id,
+		ID:     "tx-1",
 		Type:   domain.TypeTransfer,
 		Status: domain.StatusComplianceHold,
 		Asset:  "USDC",
@@ -214,7 +214,7 @@ func TestApproveReviewResetsStatusToPendingThenEnqueues(t *testing.T) {
 	repo := newComplianceMockRepo()
 	repo.reviews["rev-1"] = pendingReview("rev-1", "tx-1")
 
-	gate := newMockTxGate(heldTransaction("tx-1"))
+	gate := newMockTxGate(heldTransaction())
 	queue := &mockEnqueuer{}
 	hooks := &mockDispatcher{}
 	svc := NewService(repo, NewCompositeScreener(), NewSanctionsSet(), gate, queue, hooks)
@@ -246,7 +246,7 @@ func TestRejectReviewFailsTransferAndDoesNotEnqueue(t *testing.T) {
 	repo := newComplianceMockRepo()
 	repo.reviews["rev-1"] = pendingReview("rev-1", "tx-1")
 
-	gate := newMockTxGate(heldTransaction("tx-1"))
+	gate := newMockTxGate(heldTransaction())
 	queue := &mockEnqueuer{}
 	hooks := &mockDispatcher{}
 	svc := NewService(repo, NewCompositeScreener(), NewSanctionsSet(), gate, queue, hooks)
@@ -274,7 +274,7 @@ func TestDecidingAnAlreadyDecidedReviewIsRejected(t *testing.T) {
 	repo := newComplianceMockRepo()
 	repo.reviews["rev-1"] = pendingReview("rev-1", "tx-1")
 
-	gate := newMockTxGate(heldTransaction("tx-1"))
+	gate := newMockTxGate(heldTransaction())
 	queue := &mockEnqueuer{}
 	svc := NewService(repo, NewCompositeScreener(), NewSanctionsSet(), gate, queue, &mockDispatcher{})
 
@@ -294,7 +294,7 @@ func TestRejectAfterApproveIsRejected(t *testing.T) {
 	repo := newComplianceMockRepo()
 	repo.reviews["rev-1"] = pendingReview("rev-1", "tx-1")
 
-	gate := newMockTxGate(heldTransaction("tx-1"))
+	gate := newMockTxGate(heldTransaction())
 	svc := NewService(repo, NewCompositeScreener(), NewSanctionsSet(), gate, &mockEnqueuer{}, &mockDispatcher{})
 
 	if _, err := svc.ApproveReview(context.Background(), "rev-1", ""); err != nil {
@@ -320,7 +320,7 @@ func TestApproveRecordsReviewerFromContext(t *testing.T) {
 	repo.reviews["rev-1"] = pendingReview("rev-1", "tx-1")
 
 	svc := NewService(repo, NewCompositeScreener(), NewSanctionsSet(),
-		newMockTxGate(heldTransaction("tx-1")), &mockEnqueuer{}, &mockDispatcher{})
+		newMockTxGate(heldTransaction()), &mockEnqueuer{}, &mockDispatcher{})
 
 	ctx := tenant.WithUser(context.Background(), "user-42", "admin")
 	review, err := svc.ApproveReview(ctx, "rev-1", "")
@@ -338,7 +338,7 @@ func TestApproveWithoutUserContextLeavesReviewerEmpty(t *testing.T) {
 	repo.reviews["rev-1"] = pendingReview("rev-1", "tx-1")
 
 	svc := NewService(repo, NewCompositeScreener(), NewSanctionsSet(),
-		newMockTxGate(heldTransaction("tx-1")), &mockEnqueuer{}, &mockDispatcher{})
+		newMockTxGate(heldTransaction()), &mockEnqueuer{}, &mockDispatcher{})
 
 	review, err := svc.ApproveReview(context.Background(), "rev-1", "")
 	if err != nil {
@@ -355,7 +355,7 @@ func TestApproveSurvivesEnqueueFailure(t *testing.T) {
 	repo := newComplianceMockRepo()
 	repo.reviews["rev-1"] = pendingReview("rev-1", "tx-1")
 
-	gate := newMockTxGate(heldTransaction("tx-1"))
+	gate := newMockTxGate(heldTransaction())
 	svc := NewService(repo, NewCompositeScreener(), NewSanctionsSet(), gate,
 		&mockEnqueuer{err: errors.New("redis down")}, &mockDispatcher{})
 
@@ -373,7 +373,7 @@ func TestApproveDoesNotEnqueueWhenStatusResetFails(t *testing.T) {
 	repo := newComplianceMockRepo()
 	repo.reviews["rev-1"] = pendingReview("rev-1", "tx-1")
 
-	gate := newMockTxGate(heldTransaction("tx-1"))
+	gate := newMockTxGate(heldTransaction())
 	gate.updateErr = errors.New("database unreachable")
 	queue := &mockEnqueuer{}
 	svc := NewService(repo, NewCompositeScreener(), NewSanctionsSet(), gate, queue, &mockDispatcher{})
@@ -439,7 +439,7 @@ func TestRecordHoldCreatesReviewAndDispatchesWebhook(t *testing.T) {
 	hooks := &mockDispatcher{}
 	svc := NewService(repo, NewCompositeScreener(), NewSanctionsSet(), newMockTxGate(), &mockEnqueuer{}, hooks)
 
-	tx := heldTransaction("tx-1")
+	tx := heldTransaction()
 	err := svc.RecordHold(context.Background(), tx, &domain.ScreeningDecision{
 		Status:     domain.ScreeningHold,
 		RulesFired: []string{"structuring"},
@@ -474,7 +474,7 @@ func TestRecordHoldPropagatesRepositoryFailure(t *testing.T) {
 	repo.createErr = errors.New("database unreachable")
 	svc := NewService(repo, NewCompositeScreener(), NewSanctionsSet(), newMockTxGate(), &mockEnqueuer{}, &mockDispatcher{})
 
-	if err := svc.RecordHold(context.Background(), heldTransaction("tx-1"), &domain.ScreeningDecision{}); err == nil {
+	if err := svc.RecordHold(context.Background(), heldTransaction(), &domain.ScreeningDecision{}); err == nil {
 		t.Fatal("expected the review-creation failure to surface")
 	}
 }

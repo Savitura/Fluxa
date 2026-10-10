@@ -14,9 +14,9 @@ import (
 var testSecret = []byte("test-jwt-secret-key-32-bytes-ok!")
 
 // mint is a shorthand that fails the test on error.
-func mint(t *testing.T, tokenType string, secret []byte, dur time.Duration) string {
+func mint(t *testing.T, secret []byte, dur time.Duration) string {
 	t.Helper()
-	tok, err := GenerateToken("user-1", "tenant-1", "admin", "user@example.com", tokenType, secret, dur)
+	tok, err := GenerateToken("user-1", "tenant-1", "admin", "user@example.com", "access", secret, dur)
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -25,7 +25,7 @@ func mint(t *testing.T, tokenType string, secret []byte, dur time.Duration) stri
 
 // TestValidToken verifies that a freshly minted token round-trips cleanly.
 func TestValidToken(t *testing.T) {
-	tok := mint(t, "access", testSecret, time.Hour)
+	tok := mint(t, testSecret, time.Hour)
 
 	claims, err := ParseToken(tok, testSecret)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestValidToken(t *testing.T) {
 // TestWrongSecret verifies that a token verified with a different secret is
 // rejected with a signature error.
 func TestWrongSecret(t *testing.T) {
-	tok := mint(t, "access", testSecret, time.Hour)
+	tok := mint(t, testSecret, time.Hour)
 	wrongSecret := []byte("wrong-secret-key-32-bytes-long!!")
 
 	_, err := ParseToken(tok, wrongSecret)
@@ -69,7 +69,7 @@ func TestWrongSecret(t *testing.T) {
 
 // TestExpiredToken verifies that a token whose exp is in the past is rejected.
 func TestExpiredToken(t *testing.T) {
-	tok := mint(t, "access", testSecret, -time.Second)
+	tok := mint(t, testSecret, -time.Second)
 
 	_, err := ParseToken(tok, testSecret)
 	if err == nil {
@@ -79,7 +79,7 @@ func TestExpiredToken(t *testing.T) {
 
 // TestWrongIssuer verifies that a token carrying a different iss is rejected.
 func TestWrongIssuer(t *testing.T) {
-	tok := mint(t, "access", testSecret, time.Hour)
+	tok := mint(t, testSecret, time.Hour)
 	tok = tamperClaim(t, tok, testSecret, func(c map[string]any) {
 		c["iss"] = "evil-issuer"
 	})
@@ -92,7 +92,7 @@ func TestWrongIssuer(t *testing.T) {
 
 // TestWrongAudience verifies that a token carrying a different aud is rejected.
 func TestWrongAudience(t *testing.T) {
-	tok := mint(t, "access", testSecret, time.Hour)
+	tok := mint(t, testSecret, time.Hour)
 	tok = tamperClaim(t, tok, testSecret, func(c map[string]any) {
 		c["aud"] = "evil-audience"
 	})
@@ -106,7 +106,7 @@ func TestWrongAudience(t *testing.T) {
 // TestTamperedPayload verifies that modifying the claims segment without
 // re-signing causes a signature mismatch.
 func TestTamperedPayload(t *testing.T) {
-	tok := mint(t, "access", testSecret, time.Hour)
+	tok := mint(t, testSecret, time.Hour)
 	parts := strings.Split(tok, ".")
 
 	// Decode, modify, re-encode the claims — but keep the original signature.
@@ -138,7 +138,7 @@ func TestTamperedPayload(t *testing.T) {
 // TestAlgNoneRejection verifies that a token whose header declares "alg: none"
 // is rejected before the (absent) signature is checked.
 func TestAlgNoneRejection(t *testing.T) {
-	tok := mint(t, "access", testSecret, time.Hour)
+	tok := mint(t, testSecret, time.Hour)
 	parts := strings.Split(tok, ".")
 
 	// Replace the header with one that sets alg to "none".
@@ -158,8 +158,8 @@ func TestAlgNoneRejection(t *testing.T) {
 // TestJtiUnique verifies that every generated token carries a non-empty,
 // unique jti so tokens can be individually revoked.
 func TestJtiUnique(t *testing.T) {
-	tok1 := mint(t, "access", testSecret, time.Hour)
-	tok2 := mint(t, "access", testSecret, time.Hour)
+	tok1 := mint(t, testSecret, time.Hour)
+	tok2 := mint(t, testSecret, time.Hour)
 
 	c1, err := ParseToken(tok1, testSecret)
 	if err != nil {

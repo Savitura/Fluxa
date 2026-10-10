@@ -68,8 +68,8 @@ func (s *service) calculateFee(ctx context.Context, tenantID, asset string, amou
 		}
 	}
 
-	fee, net := Calculate(amount, feeBps)
-	fee, net = ApplyBounds(amount, fee, schedule.MinFeeAmount, schedule.MaxFeeAmount)
+	fee, _ := Calculate(amount, feeBps)
+	fee, net := ApplyBounds(amount, fee, schedule.MinFeeAmount, schedule.MaxFeeAmount)
 
 	return &TransferFee{
 		FeeAmount: fee,

@@ -108,9 +108,6 @@ type HealthResponse struct {
 	CheckedAt time.Time                   `json:"checked_at"`
 }
 
-type dependencyHealth = DependencyHealth
-type healthResponse = HealthResponse
-
 type cachedHealthResponse struct {
 	statusCode int
 	body       HealthResponse

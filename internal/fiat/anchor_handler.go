@@ -100,9 +100,7 @@ func (h *AnchorHandler) deposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.svc.InitiateDeposit(r.Context(), AnchorDepositRequest{
-		WalletID: req.WalletID, AssetCode: req.AssetCode, Amount: req.Amount, Email: req.Email,
-	})
+	res, err := h.svc.InitiateDeposit(r.Context(), AnchorDepositRequest(req))
 	if err != nil {
 		log.Error().Err(err).Msg("anchor deposit failed")
 		api.Error(w, http.StatusBadGateway, "ANCHOR_DEPOSIT_FAILED", "anchor deposit failed")
@@ -130,9 +128,7 @@ func (h *AnchorHandler) withdraw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.svc.InitiateWithdrawal(r.Context(), AnchorWithdrawRequest{
-		WalletID: req.WalletID, AssetCode: req.AssetCode, Amount: req.Amount, Dest: req.Dest,
-	})
+	res, err := h.svc.InitiateWithdrawal(r.Context(), AnchorWithdrawRequest(req))
 	if err != nil {
 		log.Error().Err(err).Msg("anchor withdrawal failed")
 		api.Error(w, http.StatusBadGateway, "ANCHOR_WITHDRAWAL_FAILED", "anchor withdrawal failed")

@@ -171,7 +171,9 @@ func storeQuoteJSON(t *testing.T, mr *miniredis.Miniredis, q *domain.Quote) {
 	if err != nil {
 		t.Fatalf("marshal quote: %v", err)
 	}
-	mr.Set(quoteKeyPrefix+q.ID, string(data))
+	if err := mr.Set(quoteKeyPrefix+q.ID, string(data)); err != nil {
+		t.Fatalf("set quote in redis: %v", err)
+	}
 }
 
 // ---------------------------------------------------------------------------

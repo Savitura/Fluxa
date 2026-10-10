@@ -229,28 +229,28 @@ func (d *Document) schema(name string) (map[string]interface{}, bool) {
 }
 
 // resolve follows a local $ref one hop, which is all this document uses.
-func (d *Document) resolve(node map[string]interface{}) (map[string]interface{}, string) {
+func (d *Document) resolve(node map[string]interface{}) map[string]interface{} {
 	ref, _ := node["$ref"].(string)
 	if !strings.HasPrefix(ref, "#/components/") {
-		return node, ""
+		return node
 	}
 	parts := strings.Split(strings.TrimPrefix(ref, "#/components/"), "/")
 	var current interface{} = d.components()
 	for _, p := range parts {
 		m, ok := current.(map[string]interface{})
 		if !ok {
-			return node, ref
+			return node
 		}
 		current, ok = m[p]
 		if !ok {
-			return node, ref
+			return node
 		}
 	}
 	resolved, ok := current.(map[string]interface{})
 	if !ok {
-		return node, ref
+		return node
 	}
-	return resolved, ref
+	return resolved
 }
 
 // ── rules ───────────────────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ func checkPathParameters(doc *Document, r *Report) {
 				if !ok {
 					continue
 				}
-				resolved, _ := doc.resolve(pm)
+				resolved := doc.resolve(pm)
 				name, _ := resolved["name"].(string)
 				in, _ := resolved["in"].(string)
 				if in == "path" {
@@ -448,7 +448,7 @@ func checkErrorResponses(doc *Document, r *Report) {
 	responses, _ := doc.components()["responses"].(map[string]interface{})
 	for _, name := range sortedKeys(responses) {
 		node, _ := responses[name].(map[string]interface{})
-		resolved, _ := doc.resolve(node)
+		resolved := doc.resolve(node)
 		if !referencesErrorResponse(doc, resolved) {
 			r.add("components.responses."+name, "does not describe the ErrorResponse schema")
 		}
@@ -476,7 +476,7 @@ func checkErrorResponses(doc *Document, r *Report) {
 				continue
 			}
 			node := responseNode(op, code)
-			resolved, _ := doc.resolve(node)
+			resolved := doc.resolve(node)
 			if !referencesErrorResponse(doc, resolved) {
 				r.add(op.ID(), "response %s does not describe the ErrorResponse schema", code)
 			}
@@ -500,7 +500,7 @@ func referencesErrorResponse(doc *Document, response map[string]interface{}) boo
 	if schema == nil {
 		return false
 	}
-	resolved, _ := doc.resolve(schema)
+	resolved := doc.resolve(schema)
 	if ref, _ := schema["$ref"].(string); ref == "#/components/schemas/ErrorResponse" {
 		return true
 	}
@@ -534,7 +534,7 @@ func checkErrorExamples(doc *Document, r *Report) {
 			if !usesErrorSchema(code) {
 				continue
 			}
-			resolved, _ := doc.resolve(responseNode(op, code))
+			resolved := doc.resolve(responseNode(op, code))
 			if !referencesErrorResponse(doc, resolved) {
 				continue
 			}
@@ -544,7 +544,7 @@ func checkErrorExamples(doc *Document, r *Report) {
 }
 
 func checkExample(doc *Document, r *Report, location string, response map[string]interface{}, codes map[string]bool) {
-	resolved, _ := doc.resolve(response)
+	resolved := doc.resolve(response)
 	content, _ := resolved["content"].(map[string]interface{})
 	media, _ := content["application/json"].(map[string]interface{})
 	example, ok := media["example"].(map[string]interface{})
@@ -624,7 +624,7 @@ func findIdempotencyParam(doc *Document, op Operation) map[string]interface{} {
 		if !ok {
 			continue
 		}
-		resolved, _ := doc.resolve(pm)
+		resolved := doc.resolve(pm)
 		if name, _ := resolved["name"].(string); name == idempotencyHeader {
 			return resolved
 		}

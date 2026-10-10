@@ -85,7 +85,7 @@ func TestEveryDocumentedExampleIsCovered(t *testing.T) {
 			if !usesErrorSchema(code) {
 				continue
 			}
-			resolved, _ := doc.resolve(responseNode(op, code))
+			resolved := doc.resolve(responseNode(op, code))
 			if !referencesErrorResponse(doc, resolved) {
 				continue
 			}

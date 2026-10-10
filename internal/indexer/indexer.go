@@ -368,7 +368,7 @@ func (idx *Indexer) processPayment(ctx context.Context, w *domain.Wallet, op ope
 		}
 	}
 
-	tx, err := newInboundTransaction(w.ID, w.PublicKey, hash, asset, amount, w.TenantID)
+	tx, err := newInboundTransaction(w.ID, hash, asset, amount, w.TenantID)
 	if err != nil {
 		return fmt.Errorf("build inbound transaction %s: %w", hash, err)
 	}
@@ -407,7 +407,7 @@ func assetCode(assetType, code string) string {
 }
 
 // newInboundTransaction creates a confirmed inbound transaction with the wallet's tenant identity.
-func newInboundTransaction(walletID, publicKey, txHash, asset, amount string, tenantID *string) (*domain.Transaction, error) {
+func newInboundTransaction(walletID, txHash, asset, amount string, tenantID *string) (*domain.Transaction, error) {
 	amt, err := decimal.NewFromString(amount)
 	if err != nil {
 		return nil, err

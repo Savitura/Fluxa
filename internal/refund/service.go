@@ -8,7 +8,6 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/fluxa/fluxa/internal/transfer"
-	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
@@ -136,5 +135,3 @@ func refundStatus(status domain.TransactionStatus) string {
 		return "pending"
 	}
 }
-
-func newRefundID() string { return uuid.NewString() }

@@ -11,10 +11,10 @@ import (
 // mustPaymentOp builds an operations.Payment fixture from raw Horizon JSON
 // field names (rather than Go struct literals) so the fixture depends only
 // on the stable, documented Horizon API contract.
-func mustPaymentOp(t *testing.T, opType, from, to, amount, assetType, assetCode, assetIssuer string) operations.Payment {
+func mustPaymentOp(t *testing.T, from, to, amount, assetType, assetCode, assetIssuer string) operations.Payment {
 	t.Helper()
 	raw := `{
-		"type": "` + opType + `",
+		"type": "payment",
 		"from": "` + from + `",
 		"to": "` + to + `",
 		"amount": "` + amount + `",
@@ -63,7 +63,7 @@ func usdcExpected(net, fee string) expectedPayment {
 func TestVerifyOps_LegitimatePaymentNoFee(t *testing.T) {
 	expected := usdcExpected("100.0000000", "0")
 	ops := []operations.Operation{
-		mustPaymentOp(t, "payment", platformFrom, platformTo, "100.0000000", "credit_alphanum4", "USDC", realIssuer),
+		mustPaymentOp(t, platformFrom, platformTo, "100.0000000", "credit_alphanum4", "USDC", realIssuer),
 	}
 
 	amountOK, assetOK, feeOK, details := verifyOps(ops, expected)
@@ -75,8 +75,8 @@ func TestVerifyOps_LegitimatePaymentNoFee(t *testing.T) {
 func TestVerifyOps_LegitimatePaymentWithFeeLeg(t *testing.T) {
 	expected := usdcExpected("95.0000000", "5.0000000")
 	ops := []operations.Operation{
-		mustPaymentOp(t, "payment", platformFrom, platformTo, "95.0000000", "credit_alphanum4", "USDC", realIssuer),
-		mustPaymentOp(t, "payment", platformFrom, feeWallet, "5.0000000", "credit_alphanum4", "USDC", realIssuer),
+		mustPaymentOp(t, platformFrom, platformTo, "95.0000000", "credit_alphanum4", "USDC", realIssuer),
+		mustPaymentOp(t, platformFrom, feeWallet, "5.0000000", "credit_alphanum4", "USDC", realIssuer),
 	}
 
 	amountOK, assetOK, feeOK, details := verifyOps(ops, expected)
@@ -89,7 +89,7 @@ func TestVerifyOps_MissingFeeLegIsRejected(t *testing.T) {
 	expected := usdcExpected("95.0000000", "5.0000000")
 	ops := []operations.Operation{
 		// Main leg present and correct, but the platform fee was never collected.
-		mustPaymentOp(t, "payment", platformFrom, platformTo, "95.0000000", "credit_alphanum4", "USDC", realIssuer),
+		mustPaymentOp(t, platformFrom, platformTo, "95.0000000", "credit_alphanum4", "USDC", realIssuer),
 	}
 
 	amountOK, assetOK, feeOK, _ := verifyOps(ops, expected)
@@ -108,7 +108,7 @@ func TestVerifyOps_MissingFeeLegIsRejected(t *testing.T) {
 func TestVerifyOps_WrongDestinationIsRejected(t *testing.T) {
 	expected := usdcExpected("100.0000000", "0")
 	ops := []operations.Operation{
-		mustPaymentOp(t, "payment", platformFrom, attackerAddr, "100.0000000", "credit_alphanum4", "USDC", realIssuer),
+		mustPaymentOp(t, platformFrom, attackerAddr, "100.0000000", "credit_alphanum4", "USDC", realIssuer),
 	}
 
 	amountOK, assetOK, _, _ := verifyOps(ops, expected)
@@ -122,7 +122,7 @@ func TestVerifyOps_WrongDestinationIsRejected(t *testing.T) {
 func TestVerifyOps_WrongSourceIsRejected(t *testing.T) {
 	expected := usdcExpected("100.0000000", "0")
 	ops := []operations.Operation{
-		mustPaymentOp(t, "payment", attackerAddr, platformTo, "100.0000000", "credit_alphanum4", "USDC", realIssuer),
+		mustPaymentOp(t, attackerAddr, platformTo, "100.0000000", "credit_alphanum4", "USDC", realIssuer),
 	}
 
 	amountOK, assetOK, _, _ := verifyOps(ops, expected)
@@ -137,7 +137,7 @@ func TestVerifyOps_WrongSourceIsRejected(t *testing.T) {
 func TestVerifyOps_LookAlikeIssuerIsRejected(t *testing.T) {
 	expected := usdcExpected("100.0000000", "0")
 	ops := []operations.Operation{
-		mustPaymentOp(t, "payment", platformFrom, platformTo, "100.0000000", "credit_alphanum4", "USDC", fakeIssuer),
+		mustPaymentOp(t, platformFrom, platformTo, "100.0000000", "credit_alphanum4", "USDC", fakeIssuer),
 	}
 
 	amountOK, assetOK, _, _ := verifyOps(ops, expected)
@@ -158,9 +158,9 @@ func TestVerifyOps_SplitAcrossOperationsIsRejected(t *testing.T) {
 		// Same (correct) destination as the real payment, right amount, but
 		// the wrong asset — e.g. an XLM payment that happens to carry the
 		// expected numeric amount.
-		mustPaymentOp(t, "payment", platformFrom, platformTo, "100.0000000", "native", "", ""),
+		mustPaymentOp(t, platformFrom, platformTo, "100.0000000", "native", "", ""),
 		// Same (correct) destination, right asset, but the wrong amount.
-		mustPaymentOp(t, "payment", platformFrom, platformTo, "1.0000000", "credit_alphanum4", "USDC", realIssuer),
+		mustPaymentOp(t, platformFrom, platformTo, "1.0000000", "credit_alphanum4", "USDC", realIssuer),
 	}
 
 	amountOK, assetOK, _, details := verifyOps(ops, expected)
@@ -176,8 +176,8 @@ func TestVerifyOps_SplitAcrossOperationsIsRejected(t *testing.T) {
 func TestVerifyOps_FeePaidToAttackerIsRejected(t *testing.T) {
 	expected := usdcExpected("95.0000000", "5.0000000")
 	ops := []operations.Operation{
-		mustPaymentOp(t, "payment", platformFrom, platformTo, "95.0000000", "credit_alphanum4", "USDC", realIssuer),
-		mustPaymentOp(t, "payment", platformFrom, attackerAddr, "5.0000000", "credit_alphanum4", "USDC", realIssuer),
+		mustPaymentOp(t, platformFrom, platformTo, "95.0000000", "credit_alphanum4", "USDC", realIssuer),
+		mustPaymentOp(t, platformFrom, attackerAddr, "5.0000000", "credit_alphanum4", "USDC", realIssuer),
 	}
 
 	_, _, feeOK, _ := verifyOps(ops, expected)
@@ -193,7 +193,7 @@ func TestVerifyOps_UnrelatedOperationTypeIsIgnored(t *testing.T) {
 	expected := usdcExpected("100.0000000", "0")
 	ops := []operations.Operation{
 		mustNonPaymentOp(t, "create_account"),
-		mustPaymentOp(t, "payment", platformFrom, platformTo, "100.0000000", "credit_alphanum4", "USDC", realIssuer),
+		mustPaymentOp(t, platformFrom, platformTo, "100.0000000", "credit_alphanum4", "USDC", realIssuer),
 	}
 
 	amountOK, assetOK, feeOK, _ := verifyOps(ops, expected)
@@ -214,7 +214,7 @@ func TestVerifyOps_NativeXLMRequiresNativeType(t *testing.T) {
 	// A credit asset that happens to be coded "XLM" must not be treated as
 	// native — only asset_type == "native" identifies the real network asset.
 	ops := []operations.Operation{
-		mustPaymentOp(t, "payment", platformFrom, platformTo, "50.0000000", "credit_alphanum4", "XLM", fakeIssuer),
+		mustPaymentOp(t, platformFrom, platformTo, "50.0000000", "credit_alphanum4", "XLM", fakeIssuer),
 	}
 
 	amountOK, assetOK, _, _ := verifyOps(ops, expected)
@@ -223,7 +223,7 @@ func TestVerifyOps_NativeXLMRequiresNativeType(t *testing.T) {
 	}
 
 	nativeOps := []operations.Operation{
-		mustPaymentOp(t, "payment", platformFrom, platformTo, "50.0000000", "native", "", ""),
+		mustPaymentOp(t, platformFrom, platformTo, "50.0000000", "native", "", ""),
 	}
 	amountOK, assetOK, feeOK, _ := verifyOps(nativeOps, expected)
 	if !amountOK || !assetOK || !feeOK {
@@ -242,7 +242,7 @@ func TestVerifyOps_NoSourceWalletSkipsSourceCheck(t *testing.T) {
 	}
 
 	ops := []operations.Operation{
-		mustPaymentOp(t, "payment", "GEXTERNALDEPOSITORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", platformTo, "10.0000000", "native", "", ""),
+		mustPaymentOp(t, "GEXTERNALDEPOSITORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", platformTo, "10.0000000", "native", "", ""),
 	}
 
 	amountOK, assetOK, feeOK, _ := verifyOps(ops, expected)

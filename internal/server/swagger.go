@@ -61,19 +61,6 @@ func ServeOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// Internal unexported aliases for backwards compatibility
-func serveSwaggerUI(w http.ResponseWriter, r *http.Request) {
-	ServeSwaggerUI(w, r)
-}
-
-func serveOpenAPISpec(w http.ResponseWriter, r *http.Request) {
-	ServeOpenAPISpec(w, r)
-}
-
-func serveRoot(w http.ResponseWriter, r *http.Request) {
-	ServeRoot(w, r)
-}
-
 // findOpenAPISpec returns the OpenAPI document served at /docs/openapi.yaml.
 // The canonical document is embedded in the binary (see package docs) so the
 // bytes served match what tools/openapicheck validated in CI regardless of the
