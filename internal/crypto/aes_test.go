@@ -38,7 +38,9 @@ func TestEncryptDecryptRoundtrip(t *testing.T) {
 
 func TestEncryptProducesUniqueCiphertexts(t *testing.T) {
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
 	plaintext := []byte("same plaintext")
 
 	c1, _ := Encrypt(plaintext, key)
@@ -52,8 +54,12 @@ func TestEncryptProducesUniqueCiphertexts(t *testing.T) {
 func TestDecryptWrongKeyFails(t *testing.T) {
 	key1 := make([]byte, 32)
 	key2 := make([]byte, 32)
-	rand.Read(key1)
-	rand.Read(key2)
+	if _, err := rand.Read(key1); err != nil {
+		t.Fatalf("generate key1: %v", err)
+	}
+	if _, err := rand.Read(key2); err != nil {
+		t.Fatalf("generate key2: %v", err)
+	}
 
 	ciphertext, _ := Encrypt([]byte("secret"), key1)
 	_, err := Decrypt(ciphertext, key2)
@@ -72,7 +78,9 @@ func TestInvalidKeyLength(t *testing.T) {
 
 func TestEnvelopeVersion(t *testing.T) {
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
 	plaintext := []byte("test")
 
 	ciphertext, err := Encrypt(plaintext, key)
@@ -99,14 +107,18 @@ func TestEnvelopeVersion(t *testing.T) {
 
 func TestDecryptLegacyFormat(t *testing.T) {
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
 	plaintext := []byte("legacy format test")
 
 	// Create legacy format ciphertext (nonce||ciphertext without version)
 	block, _ := aes.NewCipher(key)
 	gcm, _ := cipher.NewGCM(block)
 	nonce := make([]byte, gcm.NonceSize())
-	rand.Read(nonce)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("generate nonce: %v", err)
+	}
 	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
 
 	// Decrypt should handle legacy format
@@ -122,7 +134,9 @@ func TestDecryptLegacyFormat(t *testing.T) {
 
 func TestDecryptTamperedCiphertext(t *testing.T) {
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
 	plaintext := []byte("tamper test")
 
 	ciphertext, _ := Encrypt(plaintext, key)
@@ -138,7 +152,9 @@ func TestDecryptTamperedCiphertext(t *testing.T) {
 
 func TestParseEnvelope(t *testing.T) {
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
 	plaintext := []byte("parse test")
 
 	ciphertext, _ := Encrypt(plaintext, key)

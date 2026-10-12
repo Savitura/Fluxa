@@ -176,7 +176,7 @@ func (r *ComplianceRepo) ReplaceSanctionsEntities(ctx context.Context, entities 
 	if err != nil {
 		return 0, fmt.Errorf("begin sanctions refresh: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	batch := &pgx.Batch{}
 	for _, e := range entities {
@@ -196,7 +196,7 @@ func (r *ComplianceRepo) ReplaceSanctionsEntities(ctx context.Context, entities 
 	results := tx.SendBatch(ctx, batch)
 	for range entities {
 		if _, err := results.Exec(); err != nil {
-			results.Close()
+			_ = results.Close()
 			return 0, fmt.Errorf("upsert sanctions entity: %w", err)
 		}
 	}

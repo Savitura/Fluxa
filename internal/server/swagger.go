@@ -46,7 +46,7 @@ func ServeRoot(w http.ResponseWriter, _ *http.Request) {
 func ServeSwaggerUI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(swaggerHTML))
+	_, _ = w.Write([]byte(swaggerHTML))
 }
 
 // ServeOpenAPISpec serves the OpenAPI specification file at /docs/openapi.yaml.
@@ -58,20 +58,7 @@ func ServeOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
-}
-
-// Internal unexported aliases for backwards compatibility
-func serveSwaggerUI(w http.ResponseWriter, r *http.Request) {
-	ServeSwaggerUI(w, r)
-}
-
-func serveOpenAPISpec(w http.ResponseWriter, r *http.Request) {
-	ServeOpenAPISpec(w, r)
-}
-
-func serveRoot(w http.ResponseWriter, r *http.Request) {
-	ServeRoot(w, r)
+	_, _ = w.Write(data)
 }
 
 // findOpenAPISpec returns the OpenAPI document served at /docs/openapi.yaml.
@@ -82,7 +69,7 @@ func serveRoot(w http.ResponseWriter, r *http.Request) {
 // than a silent fallback, so a misconfigured path is visible.
 func findOpenAPISpec() ([]byte, error) {
 	if envPath := os.Getenv("OPENAPI_SPEC_PATH"); envPath != "" {
-		return os.ReadFile(envPath)
+		return os.ReadFile(envPath) // #nosec G304 -- intentional env-based override for local dev
 	}
 	return docs.OpenAPIYAML, nil
 }

@@ -9,13 +9,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type dependencyHistoryStub struct { latest []domain.DependencyHealthCheck; list []domain.DependencyHealthCheck; err error }
-func (s dependencyHistoryStub) LatestDependencyHealth(context.Context) ([]domain.DependencyHealthCheck, error) { return s.latest, s.err }
-func (s dependencyHistoryStub) ListDependencyHealth(_ context.Context, _ string, _ *time.Time, _ int) ([]domain.DependencyHealthCheck, error) { return s.list, s.err }
+type dependencyHistoryStub struct {
+	latest []domain.DependencyHealthCheck
+	list   []domain.DependencyHealthCheck
+	err    error
+}
+
+func (s dependencyHistoryStub) LatestDependencyHealth(context.Context) ([]domain.DependencyHealthCheck, error) {
+	return s.latest, s.err
+}
+func (s dependencyHistoryStub) ListDependencyHealth(_ context.Context, _ string, _ *time.Time, _ int) ([]domain.DependencyHealthCheck, error) {
+	return s.list, s.err
+}
 
 func TestDependencyStatusesMarksMissingAndStaleChecksUnknown(t *testing.T) {
 	now := time.Now().UTC()
-	service := NewService(nil).WithDependencyHistory(dependencyHistoryStub{latest: []domain.DependencyHealthCheck{{Dependency:"redis", Status:"healthy", CheckedAt:now.Add(-time.Hour)}}}, []string{"postgres", "redis"})
+	service := NewService(nil).WithDependencyHistory(dependencyHistoryStub{latest: []domain.DependencyHealthCheck{{Dependency: "redis", Status: "healthy", CheckedAt: now.Add(-time.Hour)}}}, []string{"postgres", "redis"})
 	statuses, degraded, unavailable, err := service.dependencyStatuses(context.Background())
 	require.NoError(t, err)
 	require.True(t, degraded)
@@ -29,7 +38,7 @@ func TestDependencyStatusesMarksMissingAndStaleChecksUnknown(t *testing.T) {
 
 func TestDependencyStatusesReportsUnhealthyAndDeterministicOrder(t *testing.T) {
 	now := time.Now().UTC()
-	service := NewService(nil).WithDependencyHistory(dependencyHistoryStub{latest: []domain.DependencyHealthCheck{{Dependency:"postgres", Status:"unhealthy", CheckedAt:now}, {Dependency:"redis", Status:"unhealthy", CheckedAt:now}}}, []string{"redis", "postgres"})
+	service := NewService(nil).WithDependencyHistory(dependencyHistoryStub{latest: []domain.DependencyHealthCheck{{Dependency: "postgres", Status: "unhealthy", CheckedAt: now}, {Dependency: "redis", Status: "unhealthy", CheckedAt: now}}}, []string{"redis", "postgres"})
 	statuses, degraded, unavailable, err := service.dependencyStatuses(context.Background())
 	require.NoError(t, err)
 	require.True(t, degraded)

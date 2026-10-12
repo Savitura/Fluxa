@@ -232,12 +232,7 @@ func (s *service) ExecuteConversion(ctx context.Context, walletID, quoteID strin
 		return nil, fmt.Errorf("conversion failed: destination amount %s is less than minimum required %s", q.ToAmount.String(), minAmountOut.String())
 	}
 
-	if maxSlippageBps != nil {
-		// For a fixed quote, the rate is already locked.
-		// If we want to check slippage against current market rate, we would fetch it here.
-		// However, typically slippage is compared to the quote rate if it was a floating quote.
-		// We just persist it since the quote is guaranteed and fixed.
-	}
+	// maxSlippageBps is recorded for audit; for a fixed quote the rate is locked
 
 	conv := &domain.Conversion{
 		ID:             uuid.New().String(),

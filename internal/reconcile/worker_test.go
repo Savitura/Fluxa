@@ -1,21 +1,9 @@
 package reconcile
 
 import (
-	"context"
 	"encoding/json"
-	"github.com/fluxa/fluxa/internal/domain"
 	"testing"
-	"time"
 )
-
-type fakeForceSettleRepo struct {
-	Repository
-	settledID string
-}
-
-func (f *fakeForceSettleRepo) GetConfirmedTxesForReconciliation(_ context.Context, _ time.Duration) ([]*domain.Transaction, error) {
-	return nil, nil
-}
 
 func TestWorkerPayloadRoundTrip(t *testing.T) {
 	fsPayload := ForceSettlePayload{

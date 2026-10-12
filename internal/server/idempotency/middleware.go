@@ -63,7 +63,7 @@ type Options struct {
 	// an expired lease is reported as still in progress.
 	AllowLeaseRecovery bool
 	// Now is injectable for tests.
-	Now func() time.Time
+	Now                   func() time.Time
 	ResponseEncryptionKey []byte
 }
 

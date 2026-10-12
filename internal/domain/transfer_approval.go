@@ -25,17 +25,17 @@ type TransferApprovalVote struct {
 }
 
 type TransferApprovalRequest struct {
-	ID                 string                 `json:"id"`
-	TenantID           string                 `json:"tenant_id"`
-	TransactionID      string                 `json:"transaction_id"`
-	CreatorID          string                 `json:"creator_id,omitempty"`
-	Asset              string                 `json:"asset"`
-	Amount             decimal.Decimal        `json:"amount"`
-	RequiredApprovals  int                    `json:"required_approvals"`
-	ApprovalCount      int                    `json:"approval_count"`
-	Status             string                 `json:"status"`
-	ExpiresAt          time.Time              `json:"expires_at"`
-	CreatedAt          time.Time              `json:"created_at"`
-	DecidedAt          *time.Time             `json:"decided_at,omitempty"`
-	Votes              []TransferApprovalVote `json:"votes"`
+	ID                string                 `json:"id"`
+	TenantID          string                 `json:"tenant_id"`
+	TransactionID     string                 `json:"transaction_id"`
+	CreatorID         string                 `json:"creator_id,omitempty"`
+	Asset             string                 `json:"asset"`
+	Amount            decimal.Decimal        `json:"amount"`
+	RequiredApprovals int                    `json:"required_approvals"`
+	ApprovalCount     int                    `json:"approval_count"`
+	Status            string                 `json:"status"`
+	ExpiresAt         time.Time              `json:"expires_at"`
+	CreatedAt         time.Time              `json:"created_at"`
+	DecidedAt         *time.Time             `json:"decided_at,omitempty"`
+	Votes             []TransferApprovalVote `json:"votes"`
 }

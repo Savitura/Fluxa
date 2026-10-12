@@ -273,16 +273,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  listPaymentLinks: () =>
-    request<{ payment_links: PaymentLink[] }>('/v1/payment-links'),
-  createPaymentLink: (body: { wallet_id: string; amount: string; currency: string; expires_at: string }) =>
+  listPaymentLinks: () => request<{ payment_links: PaymentLink[] }>('/v1/payment-links'),
+  createPaymentLink: (body: {
+    wallet_id: string;
+    amount: string;
+    currency: string;
+    expires_at: string;
+  }) =>
     request<PaymentLink>('/v1/payment-links', {
       method: 'POST',
       headers: { 'Idempotency-Key': globalThis.crypto.randomUUID() },
       body: JSON.stringify(body),
     }),
-  cancelPaymentLink: (id: string) =>
-    request<void>(`/v1/payment-links/${id}`, { method: 'DELETE' }),
+  cancelPaymentLink: (id: string) => request<void>(`/v1/payment-links/${id}`, { method: 'DELETE' }),
   createRefund: (body: { original_transaction_id: string; amount: string; reason?: string }) =>
     request<Refund>('/v1/refunds', {
       method: 'POST',
@@ -290,7 +293,9 @@ export const api = {
       body: JSON.stringify(body),
     }),
   listRefunds: (transactionId: string) =>
-    request<{ refunds: Refund[] }>(`/v1/refunds?original_transaction_id=${encodeURIComponent(transactionId)}`),
+    request<{ refunds: Refund[] }>(
+      `/v1/refunds?original_transaction_id=${encodeURIComponent(transactionId)}`,
+    ),
   listSchedules: () => request<{ schedules: ScheduleResponse[] }>('/v1/schedules'),
   createSchedule: (body: ScheduleTransferRequest) =>
     request<ScheduleResponse>('/v1/schedules', {

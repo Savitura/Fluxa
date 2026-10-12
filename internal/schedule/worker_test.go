@@ -230,6 +230,7 @@ func (f *failingTransferSvc) InitiateTransferIdempotent(ctx context.Context, fro
 
 func TestRunOne_EndToEndSuccess(t *testing.T) {
 	repo := newFakeRunRepo()
+	dueAt := time.Now().UTC().Add(-time.Minute)
 	sch := &domain.Schedule{
 		ID:         "sched-succ",
 		FromWallet: "from-1",
@@ -237,7 +238,7 @@ func TestRunOne_EndToEndSuccess(t *testing.T) {
 		Asset:      "XLM",
 		Amount:     decimal.NewFromInt(10),
 		Frequency:  domain.FrequencyDaily,
-		NextRunAt:  time.Now().UTC().Add(-time.Minute),
+		NextRunAt:  dueAt,
 		Status:     domain.ScheduleStatusActive,
 	}
 	repo.schedules[sch.ID] = sch
@@ -247,12 +248,12 @@ func TestRunOne_EndToEndSuccess(t *testing.T) {
 
 	worker.runOne(context.Background(), sch)
 
-	run, err := repo.GetRun(context.Background(), sch.ID, sch.NextRunAt)
+	// Look up the run with the original due time; runOne advances sch.NextRunAt.
+	run, err := repo.GetRun(context.Background(), sch.ID, dueAt)
 	if err != nil {
 		t.Fatalf("GetRun() error: %v", err)
 	}
 	if run.Status != domain.ScheduleRunStatusSucceeded {
-		_ = domain.ScheduleRunStatusSucceeded
 		t.Fatalf("run status = %s, want succeeded", run.Status)
 	}
 	if run.TransactionID == nil || *run.TransactionID != "tx-1" {

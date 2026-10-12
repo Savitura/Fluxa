@@ -46,7 +46,7 @@ type AnchorInfo struct {
 // assets support deposit/withdrawal, their fees, limits and KYC fields.
 func (c *Sep6Client) GetInfo(ctx context.Context, transferServer string) (*AnchorInfo, error) {
 	var info AnchorInfo
-	if err := c.doJSON(ctx, http.MethodGet, transferServer+"/info", "", nil, &info); err != nil {
+	if err := c.doJSON(ctx, transferServer+"/info", "", &info); err != nil {
 		return nil, fmt.Errorf("get sep-6 info: %w", err)
 	}
 	return &info, nil
@@ -87,7 +87,7 @@ func (c *Sep6Client) InitiateDeposit(ctx context.Context, transferServer, jwt, a
 	}
 
 	var out DepositInstructions
-	if err := c.doJSON(ctx, http.MethodGet, transferServer+"/deposit?"+q.Encode(), jwt, nil, &out); err != nil {
+	if err := c.doJSON(ctx, transferServer+"/deposit?"+q.Encode(), jwt, &out); err != nil {
 		return nil, fmt.Errorf("initiate sep-6 deposit: %w", err)
 	}
 	return &out, nil
@@ -119,7 +119,7 @@ func (c *Sep6Client) InitiateWithdrawal(ctx context.Context, transferServer, jwt
 	}
 
 	var out WithdrawalResult
-	if err := c.doJSON(ctx, http.MethodGet, transferServer+"/withdraw?"+q.Encode(), jwt, nil, &out); err != nil {
+	if err := c.doJSON(ctx, transferServer+"/withdraw?"+q.Encode(), jwt, &out); err != nil {
 		return nil, fmt.Errorf("initiate sep-6 withdrawal: %w", err)
 	}
 	return &out, nil
@@ -153,14 +153,14 @@ func (c *Sep6Client) GetTransaction(ctx context.Context, transferServer, jwt, tr
 	q.Set("id", transactionID)
 
 	var out getTransactionResponse
-	if err := c.doJSON(ctx, http.MethodGet, transferServer+"/transaction?"+q.Encode(), jwt, nil, &out); err != nil {
+	if err := c.doJSON(ctx, transferServer+"/transaction?"+q.Encode(), jwt, &out); err != nil {
 		return nil, fmt.Errorf("get sep-6 transaction: %w", err)
 	}
 	return &out.Transaction, nil
 }
 
-func (c *Sep6Client) doJSON(ctx context.Context, method, urlStr, jwt string, body io.Reader, out interface{}) error {
-	return doAnchorRequest(ctx, c.httpClient, method, urlStr, jwt, body, out)
+func (c *Sep6Client) doJSON(ctx context.Context, urlStr, jwt string, out interface{}) error {
+	return doAnchorRequest(ctx, c.httpClient, http.MethodGet, urlStr, jwt, nil, out)
 }
 
 // doAnchorRequest issues an HTTP request to an anchor endpoint (optionally

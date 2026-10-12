@@ -10,9 +10,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type historyRecorderStub struct { recorded []domain.DependencyHealthCheck; pruneBefore time.Time }
-func (r *historyRecorderStub) RecordDependencyHealth(_ context.Context, checks []domain.DependencyHealthCheck) error { r.recorded = append([]domain.DependencyHealthCheck(nil), checks...); return nil }
-func (r *historyRecorderStub) PruneDependencyHealth(_ context.Context, before time.Time) error { r.pruneBefore = before; return nil }
+type historyRecorderStub struct {
+	recorded    []domain.DependencyHealthCheck
+	pruneBefore time.Time
+}
+
+func (r *historyRecorderStub) RecordDependencyHealth(_ context.Context, checks []domain.DependencyHealthCheck) error {
+	r.recorded = append([]domain.DependencyHealthCheck(nil), checks...)
+	return nil
+}
+func (r *historyRecorderStub) PruneDependencyHealth(_ context.Context, before time.Time) error {
+	r.pruneBefore = before
+	return nil
+}
 
 func TestSamplerPersistsSanitizedStatusAndRetentionCutoff(t *testing.T) {
 	recorder := &historyRecorderStub{}

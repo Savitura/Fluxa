@@ -84,6 +84,7 @@ func IsRetryableTransport(err error) bool {
 		return true
 	}
 	var netErr net.Error
+	//nolint:staticcheck // netErr.Temporary deprecated but still signals retriable network issues
 	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
 }
 

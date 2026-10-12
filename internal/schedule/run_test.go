@@ -690,7 +690,9 @@ func TestRunOne_ExpectedRunAt_IsStoredCorrectly(t *testing.T) {
 	repo := newFakeRunRepo()
 	transferSvc := newIdempTransferSvc()
 
-	dueAt := time.Date(2026, 1, 15, 8, 0, 0, 0, time.UTC)
+	// Use a recent time so the worker doesn't fast-forward through many
+	// missed weekly occurrences.
+	dueAt := time.Now().UTC().Add(-30 * time.Second)
 	sch := makeActiveSchedule("sched-ea", dueAt)
 	repo.schedules[sch.ID] = sch
 

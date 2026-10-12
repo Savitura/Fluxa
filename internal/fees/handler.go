@@ -212,12 +212,12 @@ func (h *Handler) listCollected(w http.ResponseWriter, r *http.Request) {
 
 	limit := 100
 	if l := r.URL.Query().Get("limit"); l != "" {
-		fmt.Sscanf(l, "%d", &limit)
+		_, _ = fmt.Sscanf(l, "%d", &limit)
 	}
 
 	offset := 0
 	if o := r.URL.Query().Get("offset"); o != "" {
-		fmt.Sscanf(o, "%d", &offset)
+		_, _ = fmt.Sscanf(o, "%d", &offset)
 	}
 
 	collections, err := h.svc.ListCollected(r.Context(), start, end, tenantID, limit, offset)

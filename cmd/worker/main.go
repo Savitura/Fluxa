@@ -141,7 +141,11 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		_, _ = fmt.Fprintf(w, "# HELP fluxa_indexer_active_streams Active Horizon payment streams.\n# TYPE fluxa_indexer_active_streams gauge\nfluxa_indexer_active_streams %d\n", idx.ActiveStreams())
 	})
-	metricsServer := &http.Server{Addr: ":" + cfg.IndexerMetricsPort, Handler: metricsMux}
+	metricsServer := &http.Server{
+		Addr:              ":" + cfg.IndexerMetricsPort,
+		Handler:           metricsMux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	go func() {
 		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("indexer metrics server stopped")

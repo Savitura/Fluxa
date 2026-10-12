@@ -43,7 +43,7 @@ func writeRouteManifest(path string, doc *Document) error {
 	for _, id := range ids {
 		body += "  - " + yamlScalar(id) + "\n"
 	}
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		return err
 	}
 	return nil
@@ -53,7 +53,7 @@ func writeRouteManifest(path string, doc *Document) error {
 // directions. A route in the manifest that the document does not define is the
 // failure worth shouting about: the manifest is what callers were told exists.
 func checkRouteManifest(path string, doc *Document) []Finding {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- CLI tool, path comes from command-line flags
 	if err != nil {
 		return []Finding{{Location: path, Message: fmt.Sprintf("cannot read route manifest: %v", err)}}
 	}

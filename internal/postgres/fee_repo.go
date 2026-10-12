@@ -173,7 +173,6 @@ func (r *FeeRepo) ListCollected(ctx context.Context, start, end *time.Time, tena
 	if offset > 0 {
 		query += fmt.Sprintf(" OFFSET $%d", argN)
 		args = append(args, offset)
-		argN++
 	}
 
 	rows, err := r.db.Query(ctx, query, args...)

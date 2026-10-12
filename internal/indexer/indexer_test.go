@@ -124,7 +124,7 @@ func (f *fakeTransferRepo) CountMonthlyTransfersByTenant(_ context.Context, _ st
 	return 0, nil
 }
 func (f *fakeTransferRepo) CreateWithMonthlyLimit(_ context.Context, tx *domain.Transaction, _ string, _ int, _ time.Month, _ int) error {
-	return f.Create(nil, tx)
+	return f.Create(context.Background(), tx)
 }
 
 func (f *fakeTransferRepo) UpsertByTxHash(_ context.Context, tx *domain.Transaction) error {

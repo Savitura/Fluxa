@@ -25,16 +25,17 @@ routes:
   - "GET /v1/admin/compliance/reviews/{id}"
   - GET /v1/admin/compliance/sanctions-status
   - GET /v1/admin/fees/collected
-  - GET /v1/admin/reconciliation/summary
   - GET /v1/admin/reconciliation/discrepancies
   - GET /v1/admin/reconciliation/discrepancies/summary
+  - GET /v1/admin/reconciliation/summary
+  - GET /v1/approval-policies
   - GET /v1/audit
   - GET /v1/audit/export
-  - GET /v1/data-export
   - GET /v1/beneficiaries
   - "GET /v1/beneficiaries/{id}"
   - GET /v1/claimable-balances
   - "GET /v1/claimable-balances/{id}"
+  - GET /v1/data-export
   - GET /v1/fees
   - GET /v1/fx/rates
   - "GET /v1/idempotency/{key}"
@@ -46,9 +47,8 @@ routes:
   - "GET /v1/refunds/{id}"
   - GET /v1/schedules
   - "GET /v1/schedules/{id}/runs"
-  - GET /v1/transfers
   - GET /v1/transfer-approvals
-  - GET /v1/approval-policies
+  - GET /v1/transfers
   - "GET /v1/transfers/batch/{batchId}"
   - "GET /v1/transfers/batch/{batchId}/export"
   - "GET /v1/transfers/{id}"
@@ -58,12 +58,12 @@ routes:
   - GET /v1/webhooks
   - GET /v1/webhooks/secret
   - "GET /v1/webhooks/{id}/deliveries"
+  - "PATCH /v1/admin/reconciliation/discrepancies/{id}"
   - "PATCH /v1/keys/{id}/expiry"
   - "PATCH /v1/schedules/{id}"
   - "POST /v1/admin/compliance/reviews/{id}/approve"
   - "POST /v1/admin/compliance/reviews/{id}/reject"
   - POST /v1/admin/reconciliation/run
-  - "PATCH /v1/admin/reconciliation/discrepancies/{id}"
   - "POST /v1/admin/transfers/{transferID}/force-settle"
   - POST /v1/auth/login
   - POST /v1/auth/register
@@ -77,11 +77,12 @@ routes:
   - POST /v1/fx/quote
   - POST /v1/keys
   - "POST /v1/keys/{id}/rotate"
+  - POST /v1/payment-links
+  - POST /v1/refunds
   - POST /v1/schedules
-  - POST /v1/transfers
   - "POST /v1/transfer-approvals/{id}/approve"
   - "POST /v1/transfer-approvals/{id}/reject"
-  - PUT /v1/approval-policies
+  - POST /v1/transfers
   - POST /v1/transfers/batch
   - POST /v1/wallets
   - "POST /v1/wallets/{id}/deposit/fiat"
@@ -89,5 +90,6 @@ routes:
   - "POST /v1/wallets/{id}/withdraw/fiat"
   - POST /v1/webhooks
   - "POST /v1/webhooks/fiat/{provider}"
-  - "POST /v1/webhooks/secret/rotate"
+  - POST /v1/webhooks/secret/rotate
   - POST /v1/withdrawals
+  - PUT /v1/approval-policies

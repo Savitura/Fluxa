@@ -39,20 +39,6 @@ func TestWorker_HandleProcessTransfer_SkipsFailedTransaction(t *testing.T) {
 	}
 }
 
-type mockEngineRepo struct {
-	*fakeTxRepo
-	submitErr error
-}
-
-type errorSubmitEngine struct {
-	txRepo      *fakeTxRepo
-	errToReturn error
-}
-
-func (e *errorSubmitEngine) SubmitTransfer(ctx context.Context, txID string) error {
-	return e.errToReturn
-}
-
 func TestWorker_HandleProcessTransfer_AmbiguousSubmission(t *testing.T) {
 	tx := &domain.Transaction{
 		ID:     "tx-ambig-1",

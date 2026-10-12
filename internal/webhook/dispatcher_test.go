@@ -12,6 +12,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/queue"
+	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -113,25 +114,35 @@ func TestDispatcher_SSRFAndAsync(t *testing.T) {
 	rdb := newMockRedis(t)
 	defer rdb.Close()
 
-	qClient := queue.NewClientWithOptions(rdb.ClientOptions())
+	redisClient := redis.NewClient(rdb.ClientOptions())
+	qClient := queue.NewClientWithOptions(asynq.RedisClientOpt{Addr: rdb.mr.Addr()})
 	defer qClient.Close()
 
-	svc := NewService(repo, rdb, qClient, 120, false)
-	Dispatcher := NewDispatcher(svc, qClient)
+	svc := NewService(repo, redisClient, qClient, 120, false)
+	dispatcher := NewDispatcher(svc, qClient, nil)
 
-	ep, _, err := svc.RegisterEndpoint(context.Background(), "https://example.com/webhook", []string{"transfer.completed"})
+	ep, _, err := svc.RegisterEndpoint(context.Background(), "https://example.com/webhook", []string{domain.EventTransferSettled})
 	require.NoError(t, err)
 
-	err = Dispatcher.Dispatch(context.Background(), "transfer.completed", map[string]string{"id": "tx_123"})
+	err = dispatcher.Dispatch(context.Background(), domain.EventTransferSettled, map[string]string{"id": "tx_123"})
 	assert.NoError(t, err)
 
-	// Test loopback URL rejection
-	loopbackEp, _, err := svc.RegisterEndpoint(context.Background(), "http://127.0.0.1/webhook", []string{"transfer.completed"})
-	require.NoError(t, err)
-	err = Dispatcher.Dispatch(context.Background(), "transfer.completed", map[string]string{"id": "tx_123"})
+	// Test loopback URL rejection: inserting directly into repo bypasses registration
+	// validation, simulating a legacy endpoint added before SSRF checks. Dispatch
+	// should skip unsafe endpoints and not fail.
+	loopbackEp := &domain.WebhookEndpoint{
+		ID:        "loopback-ep",
+		URL:       "http://127.0.0.1/webhook",
+		Secret:    "whsec_test",
+		Events:    []string{domain.EventTransferSettled},
+		Active:    true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	_ = repo.CreateEndpoint(context.Background(), loopbackEp)
+	err = dispatcher.Dispatch(context.Background(), domain.EventTransferSettled, map[string]string{"id": "tx_123"})
 	assert.NoError(t, err) // Dispatch should skip unsafe endpoints and not fail
 
-	_ = loopbackEp
 	_ = ep
 }
 
@@ -155,11 +166,12 @@ func TestDispatcher_ComprehensiveSSRFAndTimeoutScenarios(t *testing.T) {
 	rdb := newMockRedis(t)
 	defer rdb.Close()
 
-	qClient := queue.NewClientWithOptions(rdb.ClientOptions())
+	redisClient := redis.NewClient(rdb.ClientOptions())
+	qClient := queue.NewClientWithOptions(asynq.RedisClientOpt{Addr: rdb.mr.Addr()})
 	defer qClient.Close()
 
-	svc := NewService(repo, rdb, qClient, 120, false)
-	_ = NewDispatcher(svc, qClient)
+	svc := NewService(repo, redisClient, qClient, 120, false)
+	_ = NewDispatcher(svc, qClient, nil)
 
 	ctx := context.Background()
 

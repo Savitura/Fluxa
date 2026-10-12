@@ -919,7 +919,7 @@ func (r *TransactionRepo) CreateWithMonthlyLimit(ctx context.Context, tx *domain
 	if err != nil {
 		return fmt.Errorf("begin limit-check tx: %w", err)
 	}
-	defer dbTx.Rollback(ctx)
+	defer func() { _ = dbTx.Rollback(ctx) }()
 
 	startDate := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
 	endDate := startDate.AddDate(0, 1, 0)
@@ -975,7 +975,7 @@ func (r *TransactionRepo) CreateWithDailyLimit(ctx context.Context, tx *domain.T
 	if err != nil {
 		return fmt.Errorf("begin daily limit-check tx: %w", err)
 	}
-	defer dbTx.Rollback(ctx)
+	defer func() { _ = dbTx.Rollback(ctx) }()
 
 	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
 	endDate := startDate.AddDate(0, 0, 1)

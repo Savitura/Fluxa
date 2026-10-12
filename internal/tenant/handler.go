@@ -25,38 +25,38 @@ func (h *Handler) Routes() func(r chi.Router) {
 }
 
 type updateTenantRequest struct {
-	MaxTransfersPerMonth   *int `json:"max_transfers_per_month,omitempty"`
-	MaxTransfersPerDay     *int `json:"max_transfers_per_day,omitempty"`
-	MaxWithdrawalsPerDay   *int `json:"max_withdrawals_per_day,omitempty"`
-	MaxWallets             *int `json:"max_wallets,omitempty"`
-	MaxWebhooks            *int `json:"max_webhooks,omitempty"`
+	MaxTransfersPerMonth *int `json:"max_transfers_per_month,omitempty"`
+	MaxTransfersPerDay   *int `json:"max_transfers_per_day,omitempty"`
+	MaxWithdrawalsPerDay *int `json:"max_withdrawals_per_day,omitempty"`
+	MaxWallets           *int `json:"max_wallets,omitempty"`
+	MaxWebhooks          *int `json:"max_webhooks,omitempty"`
 }
 
 type tenantResponse struct {
-	ID                     string  `json:"id"`
-	Name                   string  `json:"name"`
-	Email                  string  `json:"email"`
-	AccountType            string  `json:"account_type"`
-	MaxWallets             int     `json:"max_wallets"`
-	MaxTransfersPerMonth   *int    `json:"max_transfers_per_month,omitempty"`
-	MaxTransfersPerDay     *int    `json:"max_transfers_per_day,omitempty"`
-	MaxWithdrawalsPerDay   *int    `json:"max_withdrawals_per_day,omitempty"`
-	MaxWebhooks            int     `json:"max_webhooks"`
-	CreatedAt              string  `json:"created_at"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	Email                string `json:"email"`
+	AccountType          string `json:"account_type"`
+	MaxWallets           int    `json:"max_wallets"`
+	MaxTransfersPerMonth *int   `json:"max_transfers_per_month,omitempty"`
+	MaxTransfersPerDay   *int   `json:"max_transfers_per_day,omitempty"`
+	MaxWithdrawalsPerDay *int   `json:"max_withdrawals_per_day,omitempty"`
+	MaxWebhooks          int    `json:"max_webhooks"`
+	CreatedAt            string `json:"created_at"`
 }
 
 func toTenantResponse(t *domain.Tenant) tenantResponse {
 	return tenantResponse{
-		ID:                     t.ID,
-		Name:                   t.Name,
-		Email:                  t.Email,
-		AccountType:            string(t.AccountType),
-		MaxWallets:             t.MaxWallets,
-		MaxTransfersPerMonth:   t.MaxTransfersPerMonth,
-		MaxTransfersPerDay:     t.MaxTransfersPerDay,
-		MaxWithdrawalsPerDay:   t.MaxWithdrawalsPerDay,
-		MaxWebhooks:            t.MaxWebhooks,
-		CreatedAt:              t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:                   t.ID,
+		Name:                 t.Name,
+		Email:                t.Email,
+		AccountType:          string(t.AccountType),
+		MaxWallets:           t.MaxWallets,
+		MaxTransfersPerMonth: t.MaxTransfersPerMonth,
+		MaxTransfersPerDay:   t.MaxTransfersPerDay,
+		MaxWithdrawalsPerDay: t.MaxWithdrawalsPerDay,
+		MaxWebhooks:          t.MaxWebhooks,
+		CreatedAt:            t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
 

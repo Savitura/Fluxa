@@ -28,7 +28,7 @@ func (r *RefundRepo) Reserve(ctx context.Context, originalID string, amount deci
 	if err != nil {
 		return nil, fmt.Errorf("begin refund reservation: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var originalAmount, originalFee string
 	var fromWallet, toWallet, asset string

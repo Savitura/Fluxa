@@ -614,24 +614,24 @@ func TestInitiateWithdrawal_UnsupportedCurrency_RejectedBeforePricing(t *testing
 
 // ─── HandleWebhook: deposit crediting ─────────────────────────────────────────
 
-func seedPendingDeposit(repo *mockRepository, ref string, amount decimal.Decimal, currency string) *domain.FiatDeposit {
+func seedPendingDeposit(repo *mockRepository, amount decimal.Decimal) {
+	const ref = "REF-1"
 	d := &domain.FiatDeposit{
 		ID:                "deposit-" + ref,
 		WalletID:          "wallet-123",
 		Provider:          "flutterwave",
 		ProviderReference: ref,
 		FiatAmount:        amount,
-		FiatCurrency:      currency,
+		FiatCurrency:      "NGN",
 		USDCAmount:        decimal.NewFromInt(10),
 		Status:            domain.FiatStatusPending,
 	}
 	repo.deposits[d.ID] = d
-	return d
 }
 
 func TestHandleWebhook_Deposit_Success(t *testing.T) {
 	repo := newMockRepository()
-	seedPendingDeposit(repo, "REF-1", decimal.NewFromInt(16000), "NGN")
+	seedPendingDeposit(repo, decimal.NewFromInt(16000))
 	transferSvc := &mockTransferService{}
 	rail := &mockRail{webhookEvt: &RailEvent{
 		Type:        EventDepositConfirmed,
@@ -657,7 +657,7 @@ func TestHandleWebhook_Deposit_Success(t *testing.T) {
 
 func TestHandleWebhook_DuplicateEventIsClaimedOnceWithSevenDayTTL(t *testing.T) {
 	repo := newMockRepository()
-	seedPendingDeposit(repo, "REF-1", decimal.NewFromInt(16000), "NGN")
+	seedPendingDeposit(repo, decimal.NewFromInt(16000))
 	events := &mockWebhookEventRepository{events: make(map[string]time.Time)}
 	transferSvc := &mockTransferService{}
 	rail := &mockRail{webhookEvt: &RailEvent{
@@ -690,7 +690,7 @@ func TestHandleWebhook_DuplicateEventIsClaimedOnceWithSevenDayTTL(t *testing.T) 
 
 func TestHandleWebhook_Deposit_AmountMismatch_Rejected(t *testing.T) {
 	repo := newMockRepository()
-	seedPendingDeposit(repo, "REF-1", decimal.NewFromInt(16000), "NGN")
+	seedPendingDeposit(repo, decimal.NewFromInt(16000))
 	transferSvc := &mockTransferService{}
 	rail := &mockRail{webhookEvt: &RailEvent{
 		Type:        EventDepositConfirmed,
@@ -716,7 +716,7 @@ func TestHandleWebhook_Deposit_AmountMismatch_Rejected(t *testing.T) {
 
 func TestHandleWebhook_Deposit_CurrencyMismatch_Rejected(t *testing.T) {
 	repo := newMockRepository()
-	seedPendingDeposit(repo, "REF-1", decimal.NewFromInt(16000), "NGN")
+	seedPendingDeposit(repo, decimal.NewFromInt(16000))
 	transferSvc := &mockTransferService{}
 	rail := &mockRail{webhookEvt: &RailEvent{
 		Type:        EventDepositConfirmed,
@@ -760,7 +760,7 @@ func TestHandleWebhook_Deposit_UnknownReference_Errors(t *testing.T) {
 // The second delivery must be a no-op, not a second credit.
 func TestHandleWebhook_Deposit_Replay_NoDoubleCredit(t *testing.T) {
 	repo := newMockRepository()
-	seedPendingDeposit(repo, "REF-1", decimal.NewFromInt(16000), "NGN")
+	seedPendingDeposit(repo, decimal.NewFromInt(16000))
 	transferSvc := &mockTransferService{}
 	rail := &mockRail{webhookEvt: &RailEvent{
 		Type:        EventDepositConfirmed,
@@ -791,7 +791,7 @@ func TestHandleWebhook_Deposit_Replay_NoDoubleCredit(t *testing.T) {
 // funds move) may allow exactly one of them through.
 func TestHandleWebhook_Deposit_ConcurrentDelivery_OnlyCreditsOnce(t *testing.T) {
 	repo := newMockRepository()
-	seedPendingDeposit(repo, "REF-1", decimal.NewFromInt(16000), "NGN")
+	seedPendingDeposit(repo, decimal.NewFromInt(16000))
 	transferSvc := &mockTransferService{}
 	rail := &mockRail{webhookEvt: &RailEvent{
 		Type:        EventDepositConfirmed,

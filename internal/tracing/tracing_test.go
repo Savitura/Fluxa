@@ -14,6 +14,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // newTestProvider installs an in-memory tracer provider plus the W3C
@@ -75,7 +76,7 @@ func TestInitExportsToConfiguredEndpoint(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		enabled.Store(false)
-		otel.SetTracerProvider(trace.NewNoopTracerProvider())
+		otel.SetTracerProvider(noop.NewTracerProvider())
 	})
 	if !Enabled() {
 		t.Fatal("tracing should report enabled")
@@ -115,7 +116,7 @@ func TestInitDefaultsEndpointAndServiceName(t *testing.T) {
 		t.Fatalf("shutdown error: %v", err)
 	}
 	enabled.Store(false)
-	otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	otel.SetTracerProvider(noop.NewTracerProvider())
 }
 
 // TestInitNormalisesBareEndpoint checks a scheme-less endpoint is accepted,
@@ -135,7 +136,7 @@ func TestInitNormalisesBareEndpoint(t *testing.T) {
 		t.Fatalf("shutdown error: %v", err)
 	}
 	enabled.Store(false)
-	otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	otel.SetTracerProvider(noop.NewTracerProvider())
 }
 
 // TestInitInvalidEndpointFails ensures a bad endpoint is a startup error rather
