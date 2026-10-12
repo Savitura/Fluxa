@@ -9,9 +9,11 @@ CREATE TABLE IF NOT EXISTS wallet_balance_alerts (
     threshold DECIMAL(38, 18) NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE (tenant_id, mode, wallet_id, asset_code, COALESCE(asset_issuer, ''))
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX idx_wallet_balance_alerts_unique
+    ON wallet_balance_alerts (tenant_id, mode, wallet_id, asset_code, COALESCE(asset_issuer, ''));
 
 CREATE INDEX idx_wallet_balance_alerts_tenant ON wallet_balance_alerts(tenant_id);
 CREATE INDEX idx_wallet_balance_alerts_wallet ON wallet_balance_alerts(wallet_id);
