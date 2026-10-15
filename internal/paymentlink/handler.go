@@ -10,6 +10,7 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/go-chi/chi/v5"
 	"github.com/shopspring/decimal"
+	"github.com/fluxa/fluxa/internal/server/idempotency"
 )
 
 type AuditLogger interface {
@@ -143,10 +144,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func idempotencyKey(r *http.Request) string {
-	if key := r.Header.Get("Idempotency-Key"); key != "" {
-		return key
-	}
-	return r.Header.Get("X-Idempotency-Key")
+	return idempotency.IdempotencyKeyFromContext(r.Context())
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
