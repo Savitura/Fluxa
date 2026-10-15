@@ -1,69 +1,57 @@
-# Fluxa TypeScript SDK
+# Fluxa
 
-## Cursor Pagination
+Fluxa is a payment platform built on the Stellar network that provides APIs for managing wallets, transferring assets (including USDC and fiat), handling payment links, refunds, FX conversion, scheduling payouts, and more. It is designed for fintechs and businesses to integrate Stellar payments into their applications.
 
-The SDK provides helpers for cursor-based pagination to simplify fetching large datasets.
+## Project Layout
 
-### Single Page
+- `cmd/api`: HTTP API server (Go) that exposes the Fluxa API endpoints.
+- `cmd/worker`: Background worker (Go) that indexes Stellar transactions, processes schedules, handles reconciliation, and performs other asynchronous tasks.
+- `apps/web`: Web application (Next.js) for the Fluxa dashboard.
+- `sdk/`: TypeScript/JavaScript SDK for interacting with the Fluxa API.
+- `sdk-go/`: Go SDK for the Fluxa API.
+- `sdk-python/`: Python SDK for the Fluxa API.
+- `contracts/soroban/`: Soroban smart contracts (e.g., `contract_wallet` for wallet management on Stellar).
 
-```typescript
-import { FluxaClient } from '@savitura/fluxa';
+## Running Locally
 
-const client = new FluxaClient({ /* config */ });
-const { nodes, pageInfo } = await client.transfers.list(
-  { from: '0x123...' },
-  { orderBy: 'timestamp', orderDirection: 'desc' },
-  { first: 50 }
-);
+The easiest way to run Fluxa locally is using Docker Compose. The `docker-compose.yml` file defines the following services:
 
-console.log(nodes); // Array of transfers
-console.log(pageInfo.hasNextPage); // boolean
-console.log(pageInfo.endCursor); // string | null
+- `postgres`: PostgreSQL database (port 5432)
+- `redis`: Redis cache (port 6379)
+- `migrate`: One‑shot database migration that runs before the API and worker start.
+- `api`: The API server (port 3000)
+- `worker`: The background worker (exposes metrics on port 9090)
+
+To start all services:
+
+```bash
+docker compose up
 ```
 
-### Streaming with Async Iteration
+The API will be available at `http://localhost:3000`. The worker metrics endpoint is at `http://localhost:9090/metrics`.
 
-```typescript
-const client = new FluxaClient({ /* config */ });
+### Environment Variables
 
-for await (const transfer of client.transfers.iterate(
-  { from: '0x123...' },
-  { orderBy: 'timestamp' }
-)) {
-  console.log(transfer);
-  // Break early to stop further requests
-  if (someCondition) break;
-}
-```
+The services read configuration from environment variables. A `.env.example` file is provided with the required variables. For local development, you can copy it to `.env` and adjust as needed.
 
-### Fetch All Pages
+Key variables include:
 
-```typescript
-const allTransfers = await client.transfers.listAll(
-  { from: '0x123...' },
-  { orderBy: 'timestamp' }
-);
-```
+- `STELLAR_NETWORK`: Set to `testnet` for local development (uses Stellar testnet).
+- `STELLAR_HORIZON_URL`: Horizon endpoint for the Stellar network (default: `https://horizon-testnet.stellar.org`).
+- `STELLAR_USDC_ISSUER`: The issuing account for USDC on Stellar (default: `GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5`, which is the testnet USDC issuer).
+- `MASTER_ENCRYPTION_KEY`: Used to encrypt sensitive data stored in the database.
+- `PLATFORM_FEE_WALLET_PUBLIC_KEY`: The wallet that collects platform fees.
+- `ADMIN_API_KEY`: API key for administrative endpoints.
+- `FLUTTERWAVE_SECRET_KEY`: Key for fiat deposits/withdrawals via Flutterwave (set to `mock` for local dev).
 
-### Aborting Requests
+### API Keys
 
-```typescript
-const controller = new AbortController();
+Fluxa uses API keys of the form `sk_live_...` for mainnet and `sk_test_...` for testnet. The key prefix determines the environment against which the key authenticates. For local development, use testnet keys (starting with `sk_test_`). You can generate an API key via the API or the SDK.
 
-setTimeout(() => controller.abort(), 5000); // Abort after 5 seconds
+## SDK Documentation
 
-try {
-  for await (const transfer of client.transfers.iterate(
-    { from: '0x123...' },
-    undefined,
-    undefined,
-    controller.signal
-  )) {
-    console.log(transfer);
-  }
-} catch (error) {
-  if (error.name === 'CursorPaginationError') {
-    console.log('Iteration was aborted');
-  }
-}
-```
+The TypeScript SDK documentation, including cursor pagination examples, has been moved to `sdk/README.md`.
+
+## Quickstart
+
+For a step‑by‑step guide to integrating Fluxa, see the [quickstart guide](docs/quickstart.md).

@@ -316,40 +316,72 @@ const withdrawal = await client.fiat.withdraw(
 );
 ```
 
-## Cursor Pagination & Streaming
+## Cursor Pagination
 
-Fluxa provides reusable cursor-pagination primitives and async iterators to simplify traversing large collections without manual cursor tracking.
+The SDK provides helpers for cursor-based pagination to simplify fetching large datasets.
 
-### Streaming with Async Iterators
-Traverse items seamlessly using `for await...of`. Breaking out of the loop lazily halts any subsequent HTTP page requests:
+### Single Page
 
-```ts
-for await (const transfer of client.transfers.iterate({ wallet_id: "wallet-id" })) {
-  console.log(transfer.id, transfer.amount);
-  if (transfer.status === "failed") {
-    break; // Stops further page requests
-  }
-}
+```typescript
+import { FluxaClient } from '@savitura/fluxa';
+
+const client = new FluxaClient({ /* config */ });
+const { nodes, pageInfo } = await client.transfers.list(
+  { from: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
+  { orderBy: 'timestamp', orderDirection: 'desc' },
+  { first: 50 }
+);
+
+console.log(nodes); // Array of transfers
+console.log(pageInfo.hasNextPage); // boolean
+console.log(pageInfo.endCursor); // string | null
 ```
 
-### Cancellation with AbortSignal
-Pass an `AbortSignal` in options to cancel an active page request and abort the stream:
+### Streaming with Async Iteration
 
-```ts
-const controller = new AbortController();
-setTimeout(() => controller.abort(), 10000);
+```typescript
+const client = new FluxaClient({ /* config */ });
 
 for await (const transfer of client.transfers.iterate(
-  { wallet_id: "wallet-id" },
-  { signal: controller.signal }
+  { from: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
+  { orderBy: 'timestamp' }
 )) {
   console.log(transfer);
+  // Break early to stop further requests
+  if (someCondition) break;
 }
 ```
 
-### Safety against Infinite Loops
-If a malformed server response sends the same cursor token repeatedly, the SDK detects the loop and halts by throwing a typed `RepeatedCursorError`.
+### Fetch All Pages
 
+```typescript
+const allTransfers = await client.transfers.listAll(
+  { from: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
+  { orderBy: 'timestamp' }
+);
+```
+
+### Aborting Requests
+
+```typescript
+const controller = new AbortController();
+
+setTimeout(() => controller.abort(), 5000); // Abort after 5 seconds
+
+try {
+  for await (const transfer of client.transfers.iterate(
+    { from: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
+    undefined,
+    undefined,
+    controller.signal
+  )) {
+    console.log(transfer);
+  }
+} catch (error) {
+  if (error.name === 'CursorPaginationError') {
+    console.log('Iteration was aborted');
+  }
+}
 ## Error Handling
 
 ```ts
