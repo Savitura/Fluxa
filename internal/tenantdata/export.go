@@ -37,7 +37,7 @@ func (s *Service) Build(ctx context.Context, tenantID string) (*Export, error) {
 		{"transactions", `SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.created_at, t.id), '[]'::jsonb) FROM transactions t WHERE t.tenant_id = $1`},
 		{"balances", `SELECT COALESCE(jsonb_agg(to_jsonb(b) ORDER BY b.wallet_id, b.asset_code, b.issuer), '[]'::jsonb) FROM balances b JOIN wallets w ON w.id = b.wallet_id WHERE w.tenant_id = $1`},
 		{"api_keys", `SELECT COALESCE(jsonb_agg(to_jsonb(k) - 'key_hash' ORDER BY k.created_at, k.id), '[]'::jsonb) FROM api_keys k WHERE k.tenant_id = $1`},
-		{"batches", `SELECT COALESCE(jsonb_agg(to_jsonb(b) ORDER BY b.created_at, b.id), '[]'::jsonb) FROM batches b WHERE b.tenant_id = $1`},
+		{"batches", `SELECT COALESCE(jsonb_agg(to_jsonb(b) ORDER BY b.created_at, b.id), '[]'::jsonb) FROM batch_transfers b WHERE b.tenant_id = $1`},
 		{"schedules", `SELECT COALESCE(jsonb_agg(to_jsonb(s) ORDER BY s.created_at, s.id), '[]'::jsonb) FROM schedules s WHERE s.tenant_id = $1`},
 		{"beneficiaries", `SELECT COALESCE(jsonb_agg(to_jsonb(b) ORDER BY b.created_at, b.id), '[]'::jsonb) FROM beneficiaries b WHERE b.tenant_id = $1`},
 		{"webhook_endpoints", `SELECT COALESCE(jsonb_agg(to_jsonb(e) - 'secret' ORDER BY e.created_at, e.id), '[]'::jsonb) FROM webhook_endpoints e WHERE e.tenant_id = $1`},

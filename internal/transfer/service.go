@@ -82,6 +82,17 @@ type Service interface {
 	// using InitiateTransfer directly.
 	InitiateTransferIdempotent(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, idempotencyKey string) (*domain.Transaction, error)
 	InitiateBatchTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error)
+	// PrepareBatchTransfer runs every read-only check for one batch item
+	// (self-transfer, wallet existence, Horizon destination, beneficiary
+	// policy, trustline, fee) and returns the transfer skeleton without any
+	// side effects. Batch creation prepares all items first so a single bad
+	// row can reject the whole batch before anything is written or enqueued.
+	PrepareBatchTransfer(ctx context.Context, params TransferParams) (*PreparedTransfer, error)
+	// PersistBatchTransfer screens a prepared transfer and writes it, joining
+	// the ambient database transaction when the caller runs inside one. It
+	// deliberately does not enqueue settlement: batch callers persist every
+	// item atomically first and enqueue only after the transaction commits.
+	PersistBatchTransfer(ctx context.Context, p *PreparedTransfer) (*domain.Transaction, error)
 	GetTransaction(ctx context.Context, id string) (*domain.Transaction, error)
 	ListTransactions(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error)
 	// WithScreener enables compliance screening. It is optional so the
@@ -248,7 +259,37 @@ func (s *service) InitiateTransferExt(ctx context.Context, params TransferParams
 	return s.initiate(ctx, params)
 }
 
-func (s *service) initiate(ctx context.Context, params TransferParams) (*domain.Transaction, error) {
+// PreparedTransfer is a transfer that has cleared every read-only check —
+// self-transfer, wallet existence, Horizon destination account, beneficiary
+// policy, trustline, fee calculation — but has not been screened or persisted
+// yet. Batch creation prepares every item up front and only then persists
+// them, so a failure on any row can reject the whole batch with nothing
+// written and nothing enqueued.
+type PreparedTransfer struct {
+	// Tx is the transfer skeleton with all fields the repositories persist.
+	// PersistBatchTransfer may adjust its Status (compliance hold, approval
+	// pending) before the write.
+	Tx *domain.Transaction
+
+	srcPublicKey string
+	dstPublicKey string
+	tenantID     string
+	dailyLimit   int
+	monthlyLimit int
+}
+
+func (s *service) PrepareBatchTransfer(ctx context.Context, params TransferParams) (*PreparedTransfer, error) {
+	return s.prepare(ctx, params)
+}
+
+func (s *service) PersistBatchTransfer(ctx context.Context, p *PreparedTransfer) (*domain.Transaction, error) {
+	return s.persist(ctx, p)
+}
+
+// prepare performs every read-only step of a transfer and returns the
+// skeleton. It writes nothing, so batch callers can safely run it for all
+// items before opening the transaction that persists them.
+func (s *service) prepare(ctx context.Context, params TransferParams) (*PreparedTransfer, error) {
 	fromID := params.FromID
 	toID := params.ToID
 	asset := params.Asset
@@ -309,17 +350,78 @@ func (s *service) initiate(ctx context.Context, params TransferParams) (*domain.
 		}
 	}
 
+	feeResult, err := s.feeSvc.CalculateTransferFee(ctx, tenantID, asset, amount)
+	if err != nil {
+		return nil, fmt.Errorf("calculate transfer fee: %w", err)
+	}
+
+	var tenantPtr *string
+	if tenantID != "" {
+		tenantPtr = &tenantID
+	}
+
+	var batchPtr *string
+	if batchID != "" {
+		batchPtr = &batchID
+	}
+
+	tags := params.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+
+	tx := &domain.Transaction{
+		ID:                uuid.New().String(),
+		Type:              domain.TypeTransfer,
+		Status:            domain.StatusPending,
+		FromWallet:        fromID,
+		ToWallet:          toID,
+		Asset:             asset,
+		Amount:            amount,
+		Fee:               feeResult.FeeAmount,
+		FeeBps:            feeResult.FeeBps,
+		TenantID:          tenantPtr,
+		Mode:              mode,
+		BatchID:           batchPtr,
+		Reference:         reference,
+		ExternalReference: params.ExternalReference,
+		Tags:              tags,
+		CreatedAt:         time.Now().UTC(),
+		IdempotencyKey:    idempotencyKey,
+	}
+	if recordID := idempotency.RecordIDFromContext(ctx); recordID != "" && idempotencyKey != "" {
+		tx.IdempotencyRecordID = &recordID
+	}
+
+	return &PreparedTransfer{
+		Tx:           tx,
+		srcPublicKey: srcWallet.PublicKey,
+		dstPublicKey: dstWallet.PublicKey,
+		tenantID:     tenantID,
+		dailyLimit:   dailyLimit,
+		monthlyLimit: monthlyLimit,
+	}, nil
+}
+
+// persist screens a prepared transfer and writes it. It runs no enqueue: the
+// single-transfer path enqueues after this returns, and batch callers enqueue
+// only once their whole transaction has committed.
+func (s *service) persist(ctx context.Context, p *PreparedTransfer) (*domain.Transaction, error) {
+	tx := p.Tx
+	tenantID := p.tenantID
+
 	status := domain.StatusPending
 	var decision *domain.ScreeningDecision
 	if s.screener != nil {
+		var err error
 		decision, err = s.screener.ScreenTransfer(ctx, domain.ScreeningRequest{
 			OrgID:         tenantID,
-			FromWalletID:  fromID,
-			ToWalletID:    toID,
-			FromPublicKey: srcWallet.PublicKey,
-			ToPublicKey:   dstWallet.PublicKey,
-			Asset:         asset,
-			Amount:        amount,
+			FromWalletID:  tx.FromWallet,
+			ToWalletID:    tx.ToWallet,
+			FromPublicKey: p.srcPublicKey,
+			ToPublicKey:   p.dstPublicKey,
+			Asset:         tx.Asset,
+			Amount:        tx.Amount,
 		})
 		if err != nil || decision == nil {
 			decision = &domain.ScreeningDecision{
@@ -337,49 +439,12 @@ func (s *service) initiate(ctx context.Context, params TransferParams) (*domain.
 			status = domain.StatusComplianceHold
 		}
 	}
+	tx.Status = status
 
-	var tenantPtr *string
-	if tenantID != "" {
-		tenantPtr = &tenantID
-	}
-
-	feeResult, err := s.feeSvc.CalculateTransferFee(ctx, tenantID, asset, amount)
-	if err != nil {
-		return nil, fmt.Errorf("calculate transfer fee: %w", err)
-	}
-
-	var batchPtr *string
-	if batchID != "" {
-		batchPtr = &batchID
-	}
-
-	tags := params.Tags
-	if tags == nil {
-		tags = []string{}
-	}
-
-	tx := &domain.Transaction{
-		ID:                uuid.New().String(),
-		Type:              domain.TypeTransfer,
-		Status:            status,
-		FromWallet:        fromID,
-		ToWallet:          toID,
-		Asset:             asset,
-		Amount:            amount,
-		Fee:               feeResult.FeeAmount,
-		FeeBps:            feeResult.FeeBps,
-		TenantID:          tenantPtr,
-		Mode:              mode,
-		BatchID:           batchPtr,
-		Reference:         reference,
-		ExternalReference: params.ExternalReference,
-		Tags:              tags,
-		CreatedAt:         time.Now().UTC(),
-		IdempotencyKey:    idempotencyKey,
-	}
 	var approvalPolicy *domain.TransferApprovalPolicy
+	var err error
 	if status == domain.StatusPending && s.approvals != nil && tenantID != "" {
-		approvalPolicy, err = s.approvals.Plan(ctx, tenantID, asset, amount)
+		approvalPolicy, err = s.approvals.Plan(ctx, tenantID, tx.Asset, tx.Amount)
 		if err != nil {
 			return nil, fmt.Errorf("check transfer approval policy: %w", err)
 		}
@@ -387,23 +452,21 @@ func (s *service) initiate(ctx context.Context, params TransferParams) (*domain.
 			tx.Status = domain.StatusApprovalPending
 		}
 	}
-	if recordID := idempotency.RecordIDFromContext(ctx); recordID != "" && idempotencyKey != "" {
-		tx.IdempotencyRecordID = &recordID
-	}
 
 	var createErr error
 	now := time.Now().UTC()
-	if dailyLimit > 0 {
+	switch {
+	case p.dailyLimit > 0:
 		dailyRepo, ok := s.repo.(interface {
 			CreateWithDailyLimit(context.Context, *domain.Transaction, string, time.Time, int) error
 		})
 		if !ok {
 			return nil, errors.New("daily transfer limit enforcement is unavailable")
 		}
-		createErr = dailyRepo.CreateWithDailyLimit(ctx, tx, tenantID, now, dailyLimit)
-	} else if monthlyLimit > 0 {
-		createErr = s.repo.CreateWithMonthlyLimit(ctx, tx, tenantID, now.Year(), now.Month(), monthlyLimit)
-	} else {
+		createErr = dailyRepo.CreateWithDailyLimit(ctx, tx, tenantID, now, p.dailyLimit)
+	case p.monthlyLimit > 0:
+		createErr = s.repo.CreateWithMonthlyLimit(ctx, tx, tenantID, now.Year(), now.Month(), p.monthlyLimit)
+	default:
 		createErr = s.repo.Create(ctx, tx)
 	}
 	if createErr != nil {
@@ -439,6 +502,22 @@ func (s *service) initiate(ctx context.Context, params TransferParams) (*domain.
 		return tx, nil
 	}
 	if tx.Status == domain.StatusApprovalPending {
+		return tx, nil
+	}
+
+	return tx, nil
+}
+
+func (s *service) initiate(ctx context.Context, params TransferParams) (*domain.Transaction, error) {
+	p, err := s.prepare(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.persist(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if tx.Status == domain.StatusComplianceHold || tx.Status == domain.StatusApprovalPending {
 		return tx, nil
 	}
 

@@ -46,8 +46,8 @@ func TestAggregateStatusWithComplianceHolds(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := aggregateStatus(tc.txs); got != tc.want {
-				t.Fatalf("aggregateStatus = %q, want %q", got, tc.want)
+			if got, _, _, _ := domain.SummarizeBatch(tc.txs); got != tc.want {
+				t.Fatalf("SummarizeBatch status = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -69,8 +69,8 @@ func TestAggregateStatusWithoutHoldsIsUnchanged(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := aggregateStatus(tc.txs); got != tc.want {
-				t.Fatalf("aggregateStatus = %q, want %q", got, tc.want)
+			if got, _, _, _ := domain.SummarizeBatch(tc.txs); got != tc.want {
+				t.Fatalf("SummarizeBatch status = %q, want %q", got, tc.want)
 			}
 		})
 	}

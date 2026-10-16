@@ -248,6 +248,14 @@ func (m *mockTransferService) InitiateBatchTransfer(ctx context.Context, fromID,
 	return nil, nil
 }
 
+func (m *mockTransferService) PrepareBatchTransfer(_ context.Context, params transfer.TransferParams) (*transfer.PreparedTransfer, error) {
+	return nil, nil
+}
+
+func (m *mockTransferService) PersistBatchTransfer(_ context.Context, _ *transfer.PreparedTransfer) (*domain.Transaction, error) {
+	return nil, nil
+}
+
 func (m *mockTransferService) GetTransaction(ctx context.Context, id string) (*domain.Transaction, error) {
 	return nil, nil
 }

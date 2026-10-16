@@ -122,6 +122,7 @@ type Service struct {
 	alerting          *alerting.Client
 	queue             taskQueue
 	webhookSvc        webhook.Service
+	batchSyncer       BatchSyncer
 	svcName           string
 	balanceThreshold  decimal.Decimal
 	driftThreshold    decimal.Decimal
@@ -130,6 +131,13 @@ type Service struct {
 	driftRepo         DriftRepository
 	driftMu           sync.RWMutex
 	currentDrift      map[string]DriftSnapshot
+}
+
+// BatchSyncer refreshes the parent batch of a transfer this reconciler just
+// corrected or gave up on, so a batch's summary cannot lag behind a status
+// change the settlement worker never handled.
+type BatchSyncer interface {
+	SyncBatch(ctx context.Context, batchID string) error
 }
 
 func NewService(
@@ -174,6 +182,27 @@ func NewService(
 func (s *Service) WithDriftThreshold(threshold decimal.Decimal) *Service {
 	s.driftThreshold = threshold
 	return s
+}
+
+// WithBatchSyncer attaches the batch aggregate sync. Without it batches only
+// refresh on read (GET self-heal), as they did before batch settlement hooks
+// existed.
+func (s *Service) WithBatchSyncer(syncer BatchSyncer) *Service {
+	s.batchSyncer = syncer
+	return s
+}
+
+// syncBatch runs the batch aggregate sync for tx, if it belongs to a batch.
+// Failures are logged: a summary lag must not fail the reconciliation pass
+// that corrected the transfer itself.
+func (s *Service) syncBatch(ctx context.Context, tx *domain.Transaction) {
+	if s.batchSyncer == nil || tx.BatchID == nil || *tx.BatchID == "" {
+		return
+	}
+	if err := s.batchSyncer.SyncBatch(ctx, *tx.BatchID); err != nil {
+		log.Error().Err(err).Str("tx_id", tx.ID).Str("batch_id", *tx.BatchID).
+			Msg("reconcile: sync batch aggregates")
+	}
 }
 
 func (s *Service) discrepancyWorkflow() (DiscrepancyWorkflowRepository, error) {
@@ -358,6 +387,7 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 		log.Info().Str("tx_id", tx.ID).Str("tx_hash", tx.TxHash).
 			Msg("reconcile: corrected DB state pendingΓåÆconfirmed")
 		s.dispatchWebhook(ctx, domain.EventTransferSettled, tx)
+		s.syncBatch(ctx, tx)
 		return true, true, nil
 	}
 
@@ -373,6 +403,7 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 	log.Info().Str("tx_id", tx.ID).Str("tx_hash", tx.TxHash).
 		Str("result_xdr", horizonTx.ResultXdr).Msg("reconcile: corrected DB state pendingΓåÆfailed")
 	s.dispatchWebhook(ctx, domain.EventTransferFailed, tx)
+	s.syncBatch(ctx, tx)
 	return true, true, nil
 }
 
@@ -786,6 +817,7 @@ func (s *Service) RecoverPending(ctx context.Context) error {
 				}
 				s.alerting.Critical(ctx, "Transaction Failed: Max Requeues",
 					fmt.Sprintf("Transaction %s has been re-enqueued %d times without success. Marked as failed.", tx.ID, newCount))
+				s.syncBatch(ctx, tx)
 				continue
 			}
 

@@ -240,7 +240,13 @@ func main() {
 		transferSvc = transfer.ConfigureScreener(transferSvc, complianceSvc)
 	}
 
-	batchSvc := batch.NewService(batchRepo, txRepo, transferSvc)
+	batchSvc := batch.NewService(batchRepo, txRepo, transferSvc,
+		batch.WithWalletLookup(walletRepo),
+		batch.WithQueue(queueClient),
+		batch.WithTxRunner(func(ctx context.Context, fn func(context.Context) error) error {
+			return postgres.RunInTx(ctx, repoDB, fn)
+		}),
+	)
 	scheduleSvc := schedule.NewService(scheduleRepo, walletRepo)
 
 	issuers := map[string]string{

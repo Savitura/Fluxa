@@ -55,7 +55,7 @@ func (h *UsageHandler) GetUsage(w http.ResponseWriter, r *http.Request) {
 		).Scan(&conversionsCount)
 
 		_ = h.db.QueryRow(ctx,
-			`SELECT COUNT(*) FROM batches WHERE tenant_id = $1 AND mode = $2`,
+			`SELECT COUNT(*) FROM batch_transfers WHERE tenant_id = $1 AND mode = $2`,
 			tenantID, string(mode),
 		).Scan(&batchesCount)
 

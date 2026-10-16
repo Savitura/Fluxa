@@ -38,6 +38,16 @@ func (r *ComplianceRepo) WithPrimary(primary DB) *ComplianceRepo {
 	return r
 }
 
+// decisionDB routes a compliance-decision read. An ambient transaction from
+// RunInTx wins: a batch screens its items sequentially inside one
+// transaction, and the velocity rules must see the batch's own uncommitted
+// rows — the visibility each item had when every item used to run in its own
+// transaction. Otherwise the primary is used, never the replica, for the
+// reasons documented on the primary field.
+func (r *ComplianceRepo) decisionDB(ctx context.Context) DB {
+	return TxFromContext(ctx, r.primary)
+}
+
 const reviewColumns = `id, transaction_id, org_id, status, risk_score, rules_fired, reason,
 	reviewed_by, review_notes, reviewed_at, created_at`
 
@@ -55,7 +65,7 @@ func (r *ComplianceRepo) CreateReview(ctx context.Context, review *domain.Compli
 	if tID := tenant.IDFromContext(ctx); tID != "" && review.OrgID == nil {
 		review.OrgID = &tID
 	}
-	_, err := r.db.Exec(ctx,
+	_, err := TxFromContext(ctx, r.db).Exec(ctx,
 		`INSERT INTO compliance_reviews (id, transaction_id, org_id, status, risk_score, rules_fired, reason, review_notes, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		review.ID, review.TransactionID, nullableUUID(review.OrgID), review.Status,
@@ -152,7 +162,7 @@ func (r *ComplianceRepo) CreateBlock(ctx context.Context, b *domain.ComplianceBl
 	if b.Amount != nil {
 		amount = b.Amount.String()
 	}
-	_, err := r.db.Exec(ctx,
+	_, err := TxFromContext(ctx, r.db).Exec(ctx,
 		`INSERT INTO compliance_blocks (id, org_id, from_wallet_id, to_wallet_id, to_address, asset, amount, rules_fired, reason, matched_entity, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		b.ID, nullableUUID(b.OrgID), nullableUUID(b.FromWalletID), nullableUUID(b.ToWalletID),
@@ -272,7 +282,7 @@ func (r *ComplianceRepo) LatestSanctionsUpdate(ctx context.Context) (*domain.San
 // CountTransfersByOrgSince backs the velocity rule.
 func (r *ComplianceRepo) CountTransfersByOrgSince(ctx context.Context, orgID string, since time.Time) (int, error) {
 	var count int
-	err := r.primary.QueryRow(ctx,
+	err := r.decisionDB(ctx).QueryRow(ctx,
 		`SELECT COUNT(*) FROM transactions
 		 WHERE tenant_id = $1 AND type = 'transfer' AND created_at >= $2`,
 		orgID, since,
@@ -295,7 +305,7 @@ func (r *ComplianceRepo) AggregateTransfersToDestinationSince(ctx context.Contex
 
 	var count int
 	var sum string
-	if err := r.primary.QueryRow(ctx, query, args...).Scan(&count, &sum); err != nil {
+	if err := r.decisionDB(ctx).QueryRow(ctx, query, args...).Scan(&count, &sum); err != nil {
 		return 0, decimal.Zero, fmt.Errorf("aggregate transfers to destination: %w", err)
 	}
 	total, err := decimal.NewFromString(sum)
@@ -308,7 +318,7 @@ func (r *ComplianceRepo) AggregateTransfersToDestinationSince(ctx context.Contex
 // HasInboundTransferSince backs the round-trip rule.
 func (r *ComplianceRepo) HasInboundTransferSince(ctx context.Context, walletID, counterpartyWalletID string, since time.Time) (bool, error) {
 	var exists bool
-	err := r.primary.QueryRow(ctx,
+	err := r.decisionDB(ctx).QueryRow(ctx,
 		`SELECT EXISTS(
 		   SELECT 1 FROM transactions
 		   WHERE to_wallet = $1 AND from_wallet = $2 AND created_at >= $3
