@@ -1,3 +1,23 @@
+# Fluxa
+
+Cross-border payment infrastructure API.
+
+## Project direction
+
+**Decision (October 2026): keep the general payments API and freeze new features until main is stable.**
+
+Fluxa keeps its current scope — the general payments API — for the next few months. The alternatives considered (narrowing Fluxa into CrowdPay's escrow + payout layer, or pivoting to a non-custodial anchor connector) are rejected for now, and may be revisited after stabilization.
+
+New feature PRs are not merged until both of the following hold:
+
+1. CI is green on `main` (all lint, build, test and format gates passing), and
+2. the core ledger and transfer paths have test coverage ([#46](https://github.com/Savitura/Fluxa/issues/46)).
+
+During the freeze:
+
+- **Continues:** bug fixes, test coverage, CI/build stability, documentation, and security fixes.
+- **On hold:** new features — for example rate locks, approval policies, data export, test clocks and DLQs, and the open feature issues [#340](https://github.com/Savitura/Fluxa/issues/340), [#327](https://github.com/Savitura/Fluxa/issues/327) and [#4](https://github.com/Savitura/Fluxa/issues/4). These stay open but should be labelled on-hold until the freeze is lifted.
+
 # Fluxa TypeScript SDK
 
 ## Cursor Pagination
