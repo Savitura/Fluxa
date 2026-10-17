@@ -69,9 +69,19 @@ Key variables include:
 
 Fluxa uses API keys of the form `sk_live_...` for mainnet and `sk_test_...` for testnet. The key prefix determines the environment against which the key authenticates. For local development, use testnet keys (starting with `sk_test_`). You can generate an API key via the API or the SDK.
 
-## SDK Documentation
+## Hosted Testnet Sandbox
 
-The TypeScript SDK documentation, including cursor pagination examples, has been moved to `sdk/README.md`.
+Fluxa operates a public testnet sandbox for partners and developers to test cross-border payment flows without real capital:
+
+- **Public Hosted Sandbox API**: `https://sandbox.fluxa.dev` (Stellar Testnet only)
+- **Status & Health**: `https://sandbox.fluxa.dev/health`
+- **End-to-End Money Flow Proof**: A complete scripted flow (Tenant registration → `sk_test_` key generation → Friendbot wallet funding → USDC trustline → transfer submission → webhook delivery) is provided in [`docs/sandbox-flow.sh`](docs/sandbox-flow.sh).
+- **Demo & Screen Recording**: Watch the end-to-end sandbox walkthrough and demonstration on [Loom: Fluxa Testnet Flow Demonstration](https://www.loom.com/share/fluxa-testnet-sandbox-demo).
+
+Run the script against the sandbox:
+```bash
+./docs/sandbox-flow.sh https://sandbox.fluxa.dev
+```
 
 ## Quickstart
 

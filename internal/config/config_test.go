@@ -228,3 +228,126 @@ func TestLoad_TrustedProxyCIDRs(t *testing.T) {
 		t.Fatal("invalid trusted proxy CIDR should fail configuration loading")
 	}
 }
+
+func TestLoad_FlutterwaveValidation(t *testing.T) {
+	t.Run("refuses to start outside dev with empty secret key when rail enabled", func(t *testing.T) {
+		_, err := loadWith(t, map[string]string{
+			"ENV":                      "production",
+			"FLUTTERWAVE_ENABLED":      "true",
+			"FLUTTERWAVE_SECRET_KEY":   "",
+			"FLUTTERWAVE_WEBHOOK_HASH": "prod-hash",
+		})
+		if err == nil {
+			t.Fatal("expected error when FLUTTERWAVE_SECRET_KEY is empty in production")
+		}
+		if !strings.Contains(err.Error(), "FLUTTERWAVE_SECRET_KEY is required") {
+			t.Fatalf("expected error mentioning FLUTTERWAVE_SECRET_KEY is required, got: %v", err)
+		}
+	})
+
+	t.Run("refuses to start outside dev with mock secret key when rail enabled without FLUTTERWAVE_MOCK", func(t *testing.T) {
+		_, err := loadWith(t, map[string]string{
+			"ENV":                      "production",
+			"FLUTTERWAVE_ENABLED":      "true",
+			"FLUTTERWAVE_SECRET_KEY":   "mock",
+			"FLUTTERWAVE_WEBHOOK_HASH": "prod-hash",
+		})
+		if err == nil {
+			t.Fatal("expected error when FLUTTERWAVE_SECRET_KEY is mock in production")
+		}
+		if !strings.Contains(err.Error(), "FLUTTERWAVE_SECRET_KEY cannot be \"mock\"") {
+			t.Fatalf("expected error mentioning mock secret key, got: %v", err)
+		}
+	})
+
+	t.Run("refuses to start outside dev with empty webhook hash when rail enabled", func(t *testing.T) {
+		_, err := loadWith(t, map[string]string{
+			"ENV":                      "production",
+			"FLUTTERWAVE_ENABLED":      "true",
+			"FLUTTERWAVE_SECRET_KEY":   "prod-key",
+			"FLUTTERWAVE_WEBHOOK_HASH": "",
+		})
+		if err == nil {
+			t.Fatal("expected error when FLUTTERWAVE_WEBHOOK_HASH is empty in production")
+		}
+		if !strings.Contains(err.Error(), "FLUTTERWAVE_WEBHOOK_HASH is required") {
+			t.Fatalf("expected error mentioning FLUTTERWAVE_WEBHOOK_HASH is required, got: %v", err)
+		}
+	})
+
+	t.Run("refuses to start outside dev with mock webhook hash when rail enabled without FLUTTERWAVE_MOCK", func(t *testing.T) {
+		_, err := loadWith(t, map[string]string{
+			"ENV":                      "production",
+			"FLUTTERWAVE_ENABLED":      "true",
+			"FLUTTERWAVE_SECRET_KEY":   "prod-key",
+			"FLUTTERWAVE_WEBHOOK_HASH": "mock",
+		})
+		if err == nil {
+			t.Fatal("expected error when FLUTTERWAVE_WEBHOOK_HASH is mock in production")
+		}
+		if !strings.Contains(err.Error(), "FLUTTERWAVE_WEBHOOK_HASH cannot be \"mock\"") {
+			t.Fatalf("expected error mentioning mock webhook hash, got: %v", err)
+		}
+	})
+
+	t.Run("succeeds outside dev when rail is disabled even with empty keys", func(t *testing.T) {
+		cfg, err := loadWith(t, map[string]string{
+			"ENV":                      "production",
+			"FLUTTERWAVE_ENABLED":      "false",
+			"FLUTTERWAVE_SECRET_KEY":   "",
+			"FLUTTERWAVE_WEBHOOK_HASH": "",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error when rail is disabled: %v", err)
+		}
+		if cfg.FlutterwaveEnabled {
+			t.Fatal("expected FlutterwaveEnabled to be false")
+		}
+	})
+
+	t.Run("succeeds outside dev when FLUTTERWAVE_MOCK=true", func(t *testing.T) {
+		cfg, err := loadWith(t, map[string]string{
+			"ENV":                      "production",
+			"FLUTTERWAVE_ENABLED":      "true",
+			"FLUTTERWAVE_MOCK":         "true",
+			"FLUTTERWAVE_SECRET_KEY":   "",
+			"FLUTTERWAVE_WEBHOOK_HASH": "",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error with FLUTTERWAVE_MOCK=true: %v", err)
+		}
+		if !cfg.FlutterwaveMock {
+			t.Fatal("expected FlutterwaveMock to be true")
+		}
+	})
+
+	t.Run("succeeds outside dev with valid keys", func(t *testing.T) {
+		cfg, err := loadWith(t, map[string]string{
+			"ENV":                      "production",
+			"FLUTTERWAVE_ENABLED":      "true",
+			"FLUTTERWAVE_SECRET_KEY":   "FLWSECK-prod-secret",
+			"FLUTTERWAVE_WEBHOOK_HASH": "prod-verif-hash-12345",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error with valid keys: %v", err)
+		}
+		if cfg.FlutterwaveSecretKey != "FLWSECK-prod-secret" {
+			t.Fatalf("got secret key %q", cfg.FlutterwaveSecretKey)
+		}
+	})
+
+	t.Run("succeeds in development with empty or mock keys", func(t *testing.T) {
+		cfg, err := loadWith(t, map[string]string{
+			"ENV":                      "development",
+			"FLUTTERWAVE_ENABLED":      "true",
+			"FLUTTERWAVE_SECRET_KEY":   "",
+			"FLUTTERWAVE_WEBHOOK_HASH": "",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error in development: %v", err)
+		}
+		if cfg.Env != "development" {
+			t.Fatalf("got env %q", cfg.Env)
+		}
+	})
+}
