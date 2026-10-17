@@ -230,6 +230,12 @@ func (f *idempTransferSvc) InitiateTransferIdempotent(_ context.Context, fromID,
 func (f *idempTransferSvc) InitiateBatchTransfer(_ context.Context, _, _, _ string, _ decimal.Decimal, _, _ string) (*domain.Transaction, error) {
 	return &domain.Transaction{ID: "tx-batch"}, nil
 }
+func (f *idempTransferSvc) PrepareBatchTransfer(_ context.Context, _ transfer.TransferParams) (*transfer.PreparedTransfer, error) {
+	return nil, nil
+}
+func (f *idempTransferSvc) PersistBatchTransfer(_ context.Context, _ *transfer.PreparedTransfer) (*domain.Transaction, error) {
+	return nil, nil
+}
 func (f *idempTransferSvc) WithScreener(_ transfer.Screener) transfer.Service   { return f }
 func (f *idempTransferSvc) WithStellarClient(_ stellar.Client) transfer.Service { return f }
 func (f *idempTransferSvc) GetTransaction(_ context.Context, _ string) (*domain.Transaction, error) {

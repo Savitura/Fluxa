@@ -186,7 +186,7 @@ func TestMigrations(t *testing.T) {
 		domain.BatchStatusComplianceHold,
 	}
 	for _, bst := range batchStatuses {
-		b := &domain.Batch{
+		b := &domain.BatchTransfer{
 			ID:         uuid.NewString(),
 			Status:     bst,
 			TotalCount: 1,

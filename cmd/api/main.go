@@ -180,7 +180,7 @@ func main() {
 	authSvc := auth.NewService(repoDB, userRepo, tenantRepo, orgRepo, apiKeyRepo, webhookRepo, refreshTokenRepo, jwtSecretBytes)
 	orgSvc := org.NewService(repoDB, orgRepo, userRepo, tenantRepo, jwtSecretBytes)
 
-	feeSvc := fees.NewService(feeRepo)
+	feeSvc := fees.NewEstimatorService(feeRepo, fees.NewHorizonNetworkFeeSource(cfg.StellarHorizonURL, fees.DefaultBaseFeeStroops))
 	walletSvc := wallet.NewServiceWithNetwork(walletRepo, stellarClient, cfg.MasterEncryptionKey, cfg.StellarLiveNetwork, tenantRepo).
 		WithSigner(signer).
 		WithClientResolver(clientResolver).
@@ -240,7 +240,13 @@ func main() {
 		transferSvc = transfer.ConfigureScreener(transferSvc, complianceSvc)
 	}
 
-	batchSvc := batch.NewService(batchRepo, txRepo, transferSvc)
+	batchSvc := batch.NewService(batchRepo, txRepo, transferSvc,
+		batch.WithWalletLookup(walletRepo),
+		batch.WithQueue(queueClient),
+		batch.WithTxRunner(func(ctx context.Context, fn func(context.Context) error) error {
+			return postgres.RunInTx(ctx, repoDB, fn)
+		}),
+	)
 	scheduleSvc := schedule.NewService(scheduleRepo, walletRepo)
 
 	issuers := map[string]string{

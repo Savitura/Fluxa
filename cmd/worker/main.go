@@ -11,6 +11,7 @@ import (
 
 	"github.com/fluxa/fluxa/internal/alerting"
 	"github.com/fluxa/fluxa/internal/assets"
+	"github.com/fluxa/fluxa/internal/batch"
 	"github.com/fluxa/fluxa/internal/claimable"
 	"github.com/fluxa/fluxa/internal/compliance"
 	"github.com/fluxa/fluxa/internal/config"
@@ -103,6 +104,7 @@ func main() {
 	complianceRepo := postgres.NewComplianceRepo(repoDB).WithPrimary(db)
 	fiatRepo := postgres.NewFiatRepo(repoDB)
 	idempotencyRepo := postgres.NewIdempotencyRepo(repoDB)
+	batchRepo := postgres.NewBatchRepo(repoDB)
 
 	stellarClient := stellar.NewClient(cfg.StellarLiveHorizonURL, cfg.StellarLiveNetwork, cfg.StellarHorizonTimeout)
 	testStellarClient := stellar.NewClient(cfg.StellarTestnetHorizonURL, cfg.StellarTestnetNetwork, cfg.StellarHorizonTimeout)
@@ -191,6 +193,12 @@ func main() {
 		log.Fatal().Err(err).Msg("migrate tenant webhook signing secrets")
 	}
 	webhookWorker := webhook.NewWorker(webhookSvc)
+
+	// Terminal settlement and reconciliation refresh the parent batch of every
+	// batch child they resolve and fire the batch-level webhook on the
+	// transition, so batch summaries and batch.* events track live progress.
+	batchRecorder := batch.NewRecorder(batchRepo, webhookSvc)
+	settlementWorker.WithBatchSyncer(batchRecorder)
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
@@ -333,7 +341,7 @@ func main() {
 		balanceThreshold,
 		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 		cfg.PlatformFeeWalletPublicKey,
-	).WithDriftThreshold(driftThreshold)
+	).WithDriftThreshold(driftThreshold).WithBatchSyncer(batchRecorder)
 	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 
 	srv := asynq.NewServer(asynqOpt, asynq.Config{

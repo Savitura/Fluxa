@@ -66,6 +66,16 @@ var WebhookEvents = []WebhookEvent{
 		Example:     `{"review_id":"rev_123","transaction_id":"txn_123","status":"rejected","rules_fired":["sanctions_match"],"review_notes":"confirmed match"}`,
 	},
 	{
+		Name:        EventBatchCompleted,
+		Description: "Every transfer in a batch reached a terminal state (check status for the outcome).",
+		Example:     `{"batch_id":"bat_123","event":"batch.completed","status":"completed","total_count":10,"succeeded_count":10,"failed_count":0}`,
+	},
+	{
+		Name:        EventBatchPartiallyFailed,
+		Description: "A batch finished with at least one succeeded and at least one failed transfer.",
+		Example:     `{"batch_id":"bat_123","event":"batch.partially_failed","status":"partial","total_count":10,"succeeded_count":9,"failed_count":1}`,
+	},
+	{
 		Name:        EventSanctionsRefreshFailed,
 		Description: "The scheduled sanctions list refresh failed.",
 		Example:     `{"source":"ofac","error":"upstream timeout","duration_ms":4200,"failed_at":"2026-01-15T10:00:00Z"}`,

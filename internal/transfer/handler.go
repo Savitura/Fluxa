@@ -12,6 +12,7 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/go-chi/chi/v5"
 	"github.com/shopspring/decimal"
+	"github.com/fluxa/fluxa/internal/server/idempotency"
 )
 
 type Handler struct {
@@ -104,6 +105,7 @@ func toTransferResponse(tx *domain.Transaction) transferResponse {
 }
 
 func (h *Handler) initiateTransfer(w http.ResponseWriter, r *http.Request) {
+	idempotencyKey := idempotency.IdempotencyKeyFromContext(r.Context())
 	var req createTransferRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.BadRequest(w, "invalid request body")
@@ -120,10 +122,7 @@ func (h *Handler) initiateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idempotencyKey := r.Header.Get("X-Idempotency-Key")
-	if idempotencyKey == "" {
-		idempotencyKey = r.Header.Get("Idempotency-Key")
-	}
+
 
 	extended, ok := h.svc.(interface {
 		InitiateTransferExt(context.Context, TransferParams) (*domain.Transaction, error)
@@ -154,12 +153,10 @@ func (h *Handler) cancelTransfer(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	actor := api.ActorFromContext(r.Context())
+		idempotencyKey := idempotency.IdempotencyKeyFromContext(r.Context())
 
-	idempotencyKey := r.Header.Get("X-Idempotency-Key")
-	if idempotencyKey == "" {
-		idempotencyKey = r.Header.Get("Idempotency-Key")
-	}
-	if idempotencyKey == "" {
+
+		if idempotencyKey == "" {
 		api.BadRequest(w, "idempotency key is required")
 		return
 	}

@@ -19,6 +19,9 @@ const (
 	EventTransferComplianceRejected = "transfer.compliance.rejected"
 	EventSanctionsRefreshFailed     = "sanctions.refresh.failed"
 
+	EventBatchCompleted       = "batch.completed"
+	EventBatchPartiallyFailed = "batch.partially_failed"
+
 	EventClaimableBalanceCreated = "claimable_balance.created"
 	EventClaimableBalanceClaimed = "claimable_balance.claimed"
 	EventClaimableBalanceExpired = "claimable_balance.expired"

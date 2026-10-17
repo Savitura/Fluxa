@@ -7,6 +7,7 @@ import (
 
 	"github.com/fluxa/fluxa/internal/api"
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/server/idempotency"
 	"github.com/go-chi/chi/v5"
 	"github.com/shopspring/decimal"
 )
@@ -69,6 +70,9 @@ func toResponse(record *Record) response {
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	// The middleware resolves Idempotency-Key (with its X-Idempotency-Key alias)
+	// and puts the value on the context, so handlers never read the headers.
+	key := idempotency.IdempotencyKeyFromContext(r.Context())
 	var req createRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.BadRequest(w, "invalid request body")
@@ -79,14 +83,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		api.BadRequest(w, "amount must be a positive number")
 		return
 	}
-	key := r.Header.Get("Idempotency-Key")
-	if key == "" {
-		key = r.Header.Get("X-Idempotency-Key")
-	}
-	if key == "" {
-		api.BadRequest(w, "idempotency key is required")
-		return
-	}
+
 	if len(key) > 255 || len(req.Reason) > 500 {
 		api.BadRequest(w, "idempotency key or reason exceeds its maximum length")
 		return

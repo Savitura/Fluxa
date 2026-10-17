@@ -39,8 +39,12 @@ type TraceContext struct {
 // optional means payloads stay byte-identical to the pre-tracing format and
 // jobs enqueued by an older build still decode cleanly.
 type ProcessTransferPayload struct {
-	TransactionID string        `json:"transaction_id"`
-	Trace         *TraceContext `json:"trace,omitempty"`
+	TransactionID string `json:"transaction_id"`
+	// BatchID marks the task as part of a batch transfer so worker-side logs
+	// and dashboards can attribute per-transfer settlement to its parent.
+	// Settlement itself re-reads the batch link from the transaction row.
+	BatchID string        `json:"batch_id,omitempty"`
+	Trace   *TraceContext `json:"trace,omitempty"`
 }
 
 type SyncLedgerPayload struct {

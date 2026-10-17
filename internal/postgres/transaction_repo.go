@@ -58,7 +58,7 @@ func (r *TransactionRepo) Create(ctx context.Context, tx *domain.Transaction) er
 	if tx.Tags == nil {
 		tx.Tags = []string{}
 	}
-	_, err := r.db.Exec(ctx,
+	_, err := TxFromContext(ctx, r.db).Exec(ctx,
 		`INSERT INTO transactions (
 			id, tx_hash, type, status, from_wallet, to_wallet, asset, amount, fee, fee_bps,
 			tenant_id, mode, created_at, requeue_count, reconciled_at,
@@ -593,7 +593,7 @@ func (r *TransactionRepo) GetStuckPendingTxes(ctx context.Context, olderThan tim
 		RETURNING id, COALESCE(tx_hash,''), type, status,
 		          COALESCE(from_wallet::text,''), COALESCE(to_wallet::text,''),
 		          asset, amount, COALESCE(fee,'0'), fee_bps, tenant_id, created_at,
-		          COALESCE(requeue_count, 0), reconciled_at`,
+		          COALESCE(requeue_count, 0), reconciled_at, batch_id`,
 		olderThan.String(), limit,
 	)
 	if err != nil {
@@ -606,11 +606,11 @@ func (r *TransactionRepo) GetStuckPendingTxes(ctx context.Context, olderThan tim
 		tx := &domain.Transaction{}
 		var amount, fee string
 		var feeBps *int
-		var tenantID *string
+		var tenantID, batchID *string
 		if err := rows.Scan(&tx.ID, &tx.TxHash, &tx.Type, &tx.Status,
 			&tx.FromWallet, &tx.ToWallet,
 			&tx.Asset, &amount, &fee, &feeBps, &tenantID, &tx.CreatedAt,
-			&tx.RequeueCount, &tx.ReconciledAt); err != nil {
+			&tx.RequeueCount, &tx.ReconciledAt, &batchID); err != nil {
 			return nil, err
 		}
 		tx.Amount, _ = decimal.NewFromString(amount)
@@ -619,6 +619,7 @@ func (r *TransactionRepo) GetStuckPendingTxes(ctx context.Context, olderThan tim
 			tx.FeeBps = *feeBps
 		}
 		tx.TenantID = tenantID
+		tx.BatchID = batchID
 		txs = append(txs, tx)
 	}
 	return txs, rows.Err()
@@ -805,7 +806,7 @@ func (r *TransactionRepo) GetPendingTxesForReconciliation(ctx context.Context, o
 		RETURNING id, COALESCE(tx_hash,''), type, status,
 		          COALESCE(from_wallet::text,''), COALESCE(to_wallet::text,''),
 		          asset, amount, COALESCE(fee,'0'), fee_bps, tenant_id, created_at,
-		          COALESCE(requeue_count, 0), reconciled_at`,
+		          COALESCE(requeue_count, 0), reconciled_at, batch_id`,
 		olderThan.String(), limit,
 	)
 	if err != nil {
@@ -819,10 +820,11 @@ func (r *TransactionRepo) GetPendingTxesForReconciliation(ctx context.Context, o
 		var amount, fee string
 		var feeBps *int
 		var tenantID *string
+		var batchID *string
 		if err := rows.Scan(&tx.ID, &tx.TxHash, &tx.Type, &tx.Status,
 			&tx.FromWallet, &tx.ToWallet,
 			&tx.Asset, &amount, &fee, &feeBps, &tenantID, &tx.CreatedAt,
-			&tx.RequeueCount, &tx.ReconciledAt); err != nil {
+			&tx.RequeueCount, &tx.ReconciledAt, &batchID); err != nil {
 			return nil, err
 		}
 		tx.Amount, _ = decimal.NewFromString(amount)
@@ -831,6 +833,7 @@ func (r *TransactionRepo) GetPendingTxesForReconciliation(ctx context.Context, o
 			tx.FeeBps = *feeBps
 		}
 		tx.TenantID = tenantID
+		tx.BatchID = batchID
 		txs = append(txs, tx)
 	}
 	if err := rows.Err(); err != nil {
@@ -913,111 +916,133 @@ func (r *TransactionRepo) CountDailyTransfersByTenant(ctx context.Context, tenan
 }
 
 // CreateWithMonthlyLimit atomically checks the tenant's monthly transfer count
-// and inserts the transaction in a single database transaction.
+// and inserts the transaction in a single database transaction. When the
+// caller already runs inside RunInTx — a batch persisting all of its items at
+// once — the check and insert join that ambient transaction instead of
+// opening a second one: the batch's earlier rows are visible to the count and
+// the whole batch commits or rolls back as a single unit.
 func (r *TransactionRepo) CreateWithMonthlyLimit(ctx context.Context, tx *domain.Transaction, tenantID string, year int, month time.Month, limit int) error {
+	startDate := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+	endDate := startDate.AddDate(0, 1, 0)
+
+	insert := func(txCtx context.Context, db DB) error {
+		var locked int
+		err := db.QueryRow(txCtx, `SELECT 1 FROM tenants WHERE id = $1 FOR UPDATE`, tenantID).Scan(&locked)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("lock tenant for limit check: %w", err)
+		}
+
+		var count int
+		err = db.QueryRow(txCtx,
+			`SELECT COUNT(*) FROM transactions WHERE tenant_id = $1 AND mode = $2 AND created_at >= $3 AND created_at < $4`,
+			tenantID, transactionMode(txCtx), startDate, endDate,
+		).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("count monthly transfers: %w", err)
+		}
+
+		if count >= limit {
+			return domain.ErrTransferLimitReached
+		}
+
+		if tx.Tags == nil {
+			tx.Tags = []string{}
+		}
+		_, err = db.Exec(txCtx,
+			`INSERT INTO transactions (id, tx_hash, type, status, from_wallet, to_wallet, asset, amount, fee, fee_bps, tenant_id, mode, created_at, requeue_count, reconciled_at, batch_id, reference, external_reference, tags, idempotency_key, idempotency_record_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+			tx.ID, nullableString(tx.TxHash), tx.Type, tx.Status,
+			nullableString(tx.FromWallet), nullableString(tx.ToWallet),
+			tx.Asset, tx.Amount.String(), tx.Fee.String(), nullableFeeBps(tx.FeeBps),
+			nullableUUID(tx.TenantID), transactionMode(txCtx), tx.CreatedAt,
+			tx.RequeueCount, nullableTime(tx.ReconciledAt),
+			nullableUUID(tx.BatchID), nullableString(tx.Reference),
+			nullableStringPtr(tx.ExternalReference), tx.Tags,
+			nullableString(tx.IdempotencyKey), nullableUUID(tx.IdempotencyRecordID),
+		)
+		if err != nil {
+			return fmt.Errorf("insert transaction: %w", mapTransactionInsertError(err))
+		}
+		return nil
+	}
+
+	if amb, ok := AmbientTx(ctx); ok {
+		return insert(ctx, amb)
+	}
 	dbTx, err := r.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin limit-check tx: %w", err)
 	}
 	defer func() { _ = dbTx.Rollback(ctx) }()
 
-	startDate := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
-	endDate := startDate.AddDate(0, 1, 0)
-
-	var locked int
-	err = dbTx.QueryRow(ctx, `SELECT 1 FROM tenants WHERE id = $1 FOR UPDATE`, tenantID).Scan(&locked)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("lock tenant for limit check: %w", err)
+	if err := insert(ctx, dbTx); err != nil {
+		return err
 	}
-
-	var count int
-	err = dbTx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM transactions WHERE tenant_id = $1 AND mode = $2 AND created_at >= $3 AND created_at < $4`,
-		tenantID, transactionMode(ctx), startDate, endDate,
-	).Scan(&count)
-	if err != nil {
-		return fmt.Errorf("count monthly transfers: %w", err)
-	}
-
-	if count >= limit {
-		return domain.ErrTransferLimitReached
-	}
-
-	if tx.Tags == nil {
-		tx.Tags = []string{}
-	}
-	_, err = dbTx.Exec(ctx,
-		`INSERT INTO transactions (id, tx_hash, type, status, from_wallet, to_wallet, asset, amount, fee, fee_bps, tenant_id, mode, created_at, requeue_count, reconciled_at, batch_id, reference, external_reference, tags, idempotency_key, idempotency_record_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
-		tx.ID, nullableString(tx.TxHash), tx.Type, tx.Status,
-		nullableString(tx.FromWallet), nullableString(tx.ToWallet),
-		tx.Asset, tx.Amount.String(), tx.Fee.String(), nullableFeeBps(tx.FeeBps),
-		nullableUUID(tx.TenantID), transactionMode(ctx), tx.CreatedAt,
-		tx.RequeueCount, nullableTime(tx.ReconciledAt),
-		nullableUUID(tx.BatchID), nullableString(tx.Reference),
-		nullableStringPtr(tx.ExternalReference), tx.Tags,
-		nullableString(tx.IdempotencyKey), nullableUUID(tx.IdempotencyRecordID),
-	)
-	if err != nil {
-		return fmt.Errorf("insert transaction: %w", mapTransactionInsertError(err))
-	}
-
 	if err := dbTx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit limit-check tx: %w", err)
 	}
 	return nil
 }
 
-// CreateWithDailyLimit atomically checks the tenant's daily transfer count
-// and inserts the transaction in a single database transaction.
+// CreateWithDailyLimit is the daily-window sibling of CreateWithMonthlyLimit
+// and joins an ambient caller transaction the same way.
 func (r *TransactionRepo) CreateWithDailyLimit(ctx context.Context, tx *domain.Transaction, tenantID string, date time.Time, limit int) error {
+	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
+	endDate := startDate.AddDate(0, 0, 1)
+
+	insert := func(txCtx context.Context, db DB) error {
+		var locked int
+		err := db.QueryRow(txCtx, `SELECT 1 FROM tenants WHERE id = $1 FOR UPDATE`, tenantID).Scan(&locked)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("lock tenant for daily limit check: %w", err)
+		}
+
+		var count int
+		err = db.QueryRow(txCtx,
+			`SELECT COUNT(*) FROM transactions WHERE tenant_id = $1 AND mode = $2 AND created_at >= $3 AND created_at < $4`,
+			tenantID, transactionMode(txCtx), startDate, endDate,
+		).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("count daily transfers: %w", err)
+		}
+
+		if count >= limit {
+			return domain.ErrDailyTransferLimitReached
+		}
+
+		if tx.Tags == nil {
+			tx.Tags = []string{}
+		}
+		_, err = db.Exec(txCtx,
+			`INSERT INTO transactions (id, tx_hash, type, status, from_wallet, to_wallet, asset, amount, fee, fee_bps, tenant_id, mode, created_at, requeue_count, reconciled_at, batch_id, reference, external_reference, tags, idempotency_key, idempotency_record_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+			tx.ID, nullableString(tx.TxHash), tx.Type, tx.Status,
+			nullableString(tx.FromWallet), nullableString(tx.ToWallet),
+			tx.Asset, tx.Amount.String(), tx.Fee.String(), nullableFeeBps(tx.FeeBps),
+			nullableUUID(tx.TenantID), transactionMode(txCtx), tx.CreatedAt,
+			tx.RequeueCount, nullableTime(tx.ReconciledAt),
+			nullableUUID(tx.BatchID), nullableString(tx.Reference),
+			nullableStringPtr(tx.ExternalReference), tx.Tags,
+			nullableString(tx.IdempotencyKey), nullableUUID(tx.IdempotencyRecordID),
+		)
+		if err != nil {
+			return fmt.Errorf("insert transaction: %w", mapTransactionInsertError(err))
+		}
+		return nil
+	}
+
+	if amb, ok := AmbientTx(ctx); ok {
+		return insert(ctx, amb)
+	}
 	dbTx, err := r.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin daily limit-check tx: %w", err)
 	}
 	defer func() { _ = dbTx.Rollback(ctx) }()
 
-	startDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
-	endDate := startDate.AddDate(0, 0, 1)
-
-	var locked int
-	err = dbTx.QueryRow(ctx, `SELECT 1 FROM tenants WHERE id = $1 FOR UPDATE`, tenantID).Scan(&locked)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("lock tenant for daily limit check: %w", err)
+	if err := insert(ctx, dbTx); err != nil {
+		return err
 	}
-
-	var count int
-	err = dbTx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM transactions WHERE tenant_id = $1 AND mode = $2 AND created_at >= $3 AND created_at < $4`,
-		tenantID, transactionMode(ctx), startDate, endDate,
-	).Scan(&count)
-	if err != nil {
-		return fmt.Errorf("count daily transfers: %w", err)
-	}
-
-	if count >= limit {
-		return domain.ErrDailyTransferLimitReached
-	}
-
-	if tx.Tags == nil {
-		tx.Tags = []string{}
-	}
-	_, err = dbTx.Exec(ctx,
-		`INSERT INTO transactions (id, tx_hash, type, status, from_wallet, to_wallet, asset, amount, fee, fee_bps, tenant_id, mode, created_at, requeue_count, reconciled_at, batch_id, reference, external_reference, tags, idempotency_key, idempotency_record_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
-		tx.ID, nullableString(tx.TxHash), tx.Type, tx.Status,
-		nullableString(tx.FromWallet), nullableString(tx.ToWallet),
-		tx.Asset, tx.Amount.String(), tx.Fee.String(), nullableFeeBps(tx.FeeBps),
-		nullableUUID(tx.TenantID), transactionMode(ctx), tx.CreatedAt,
-		tx.RequeueCount, nullableTime(tx.ReconciledAt),
-		nullableUUID(tx.BatchID), nullableString(tx.Reference),
-		nullableStringPtr(tx.ExternalReference), tx.Tags,
-		nullableString(tx.IdempotencyKey), nullableUUID(tx.IdempotencyRecordID),
-	)
-	if err != nil {
-		return fmt.Errorf("insert transaction: %w", mapTransactionInsertError(err))
-	}
-
 	if err := dbTx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit daily limit-check tx: %w", err)
 	}

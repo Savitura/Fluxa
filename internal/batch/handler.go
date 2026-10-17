@@ -2,6 +2,7 @@ package batch
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -84,34 +85,39 @@ type ValidationError struct {
 
 type batchResponse struct {
 	ID               string                  `json:"id"`
+	BatchID          string                  `json:"batch_id"`
 	Status           string                  `json:"status"`
 	TotalCount       int                     `json:"total_count"`
 	SuccessCount     int                     `json:"success_count"`
 	FailedCount      int                     `json:"failed_count"`
 	HeldCount        int                     `json:"held_count"`
 	CreatedAt        string                  `json:"created_at"`
+	SettledAt        string                  `json:"settled_at,omitempty"`
+	TransferIDs      []string                `json:"transfer_ids"`
 	Transfers        []batchTransferResponse `json:"transfers,omitempty"`
 	ValidationErrors []ValidationError       `json:"validation_errors,omitempty"`
 }
 
 func toBatchResponse(result *Result) batchResponse {
+	status, succeeded, failed, held := domain.SummarizeBatch(result.Transactions)
 	resp := batchResponse{
-		ID:         result.Batch.ID,
-		Status:     string(result.Batch.Status),
-		TotalCount: result.Batch.TotalCount,
-		CreatedAt:  result.Batch.CreatedAt.Format(time.RFC3339),
+		ID:           result.Batch.ID,
+		BatchID:      result.Batch.ID,
+		Status:       string(status),
+		TotalCount:   result.Batch.TotalCount,
+		SuccessCount: succeeded,
+		FailedCount:  failed,
+		HeldCount:    held,
+		CreatedAt:    result.Batch.CreatedAt.Format(time.RFC3339),
+		TransferIDs:  make([]string, len(result.Transactions)),
+	}
+	if result.Batch.SettledAt != nil {
+		resp.SettledAt = result.Batch.SettledAt.Format(time.RFC3339)
 	}
 
 	resp.Transfers = make([]batchTransferResponse, len(result.Transactions))
 	for i, tx := range result.Transactions {
-		switch tx.Status {
-		case domain.StatusConfirmed:
-			resp.SuccessCount++
-		case domain.StatusFailed:
-			resp.FailedCount++
-		case domain.StatusComplianceHold:
-			resp.HeldCount++
-		}
+		resp.TransferIDs[i] = tx.ID
 		resp.Transfers[i] = batchTransferResponse{
 			ID:             tx.ID,
 			ToWallet:       tx.ToWallet,
@@ -126,6 +132,19 @@ func toBatchResponse(result *Result) batchResponse {
 	}
 
 	return resp
+}
+
+func validationDetails(errs []ValidationError) []api.ValidationErrorDetail {
+	details := make([]api.ValidationErrorDetail, len(errs))
+	for i, ve := range errs {
+		details[i] = api.ValidationErrorDetail{
+			Row:    ve.Row,
+			Field:  ve.Field,
+			Value:  ve.Value,
+			Reason: ve.Reason,
+		}
+	}
+	return details
 }
 
 func (h *Handler) createBatch(w http.ResponseWriter, r *http.Request) {
@@ -170,21 +189,19 @@ func (h *Handler) createBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(validationErrors) > 0 {
-		details := make([]api.ValidationErrorDetail, len(validationErrors))
-		for i, ve := range validationErrors {
-			details[i] = api.ValidationErrorDetail{
-				Row:    ve.Row,
-				Field:  ve.Field,
-				Value:  ve.Value,
-				Reason: ve.Reason,
-			}
-		}
-		api.BadRequestWithValidationErrors(w, fmt.Sprintf("%d row(s) have validation errors", len(validationErrors)), details)
+		api.BadRequestWithValidationErrors(w, fmt.Sprintf("%d row(s) have validation errors", len(validationErrors)), validationDetails(validationErrors))
 		return
 	}
 
 	result, err := h.svc.CreateBatch(r.Context(), req.FromWalletID, items)
 	if err != nil {
+		// The service's pre-validation pass (wallet existence, self-transfer)
+		// produces the same per-row error shape as the syntactic checks above.
+		var batchErr *BatchValidationError
+		if errors.As(err, &batchErr) {
+			api.BadRequestWithValidationErrors(w, batchErr.Error(), validationDetails(batchErr.Errors))
+			return
+		}
 		api.HandleDomainError(w, err)
 		return
 	}

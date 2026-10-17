@@ -108,12 +108,15 @@ export interface BatchTransferResponse {
 
 export interface BatchResponse {
   id: string;
+  batch_id: string;
   status: BatchStatus;
   total_count: number;
   success_count: number;
   failed_count: number;
   held_count: number;
   created_at: string;
+  settled_at?: string;
+  transfer_ids: string[];
   transfers?: BatchTransferResponse[];
 }
 
@@ -281,7 +284,9 @@ export type EventType =
   | 'transfer.settled'
   | 'transfer.failed'
   | 'wallet.funded'
-  | 'conversion.completed';
+  | 'conversion.completed'
+  | 'batch.completed'
+  | 'batch.partially_failed';
 
 export type DeliveryStatus = 'pending' | 'success' | 'failed';
 

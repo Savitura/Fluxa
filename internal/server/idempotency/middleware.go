@@ -11,11 +11,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fluxa/fluxa/internal/api"
@@ -109,8 +111,12 @@ func MiddlewareWithOptions(repo Repository, opts Options) func(http.Handler) htt
 	opts = opts.withDefaults()
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rawKey := ExtractKey(r)
-			if rawKey == "" {
+			key, err := GetIdempotencyKey(r)
+			if err != nil {
+				api.Error(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_CONFLICT", "conflicting Idempotency-Key and X-Idempotency-Key headers")
+				return
+			}
+			if key == "" {
 				if opts.Required {
 					api.Error(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key header is required for this endpoint")
 					return
@@ -119,7 +125,8 @@ func MiddlewareWithOptions(repo Repository, opts Options) func(http.Handler) htt
 				return
 			}
 
-			key := DeterministicKey(rawKey)
+			key = DeterministicKey(key)
+			ctx := withIdempotencyKey(r.Context(), key)
 
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
@@ -129,12 +136,12 @@ func MiddlewareWithOptions(repo Repository, opts Options) func(http.Handler) htt
 			r.Body = io.NopCloser(bytes.NewReader(body))
 
 			hash := requestHash(r.Method, r.URL.Path, body)
-			orgID := tenant.IDFromContext(r.Context())
-			mode := tenant.ModeOrDefault(r.Context(), domain.ModeLive)
+			orgID := tenant.IDFromContext(ctx)
+			mode := tenant.ModeOrDefault(ctx, domain.ModeLive)
 			now := opts.Now().UTC()
 
 			acquisition, err := repo.Acquire(
-				r.Context(),
+				ctx,
 				orgID,
 				mode,
 				key,
@@ -180,9 +187,9 @@ func MiddlewareWithOptions(repo Repository, opts Options) func(http.Handler) htt
 			}
 
 			recorder := newRecorder(int(opts.MaxResponseBody))
-			next.ServeHTTP(recorder, r.WithContext(withRecordID(r.Context(), acquisition.Record.ID)))
+			next.ServeHTTP(recorder, r.WithContext(withRecordID(ctx, acquisition.Record.ID)))
 			if recorder.err != nil {
-				zerolog.Ctx(r.Context()).Error().Err(recorder.err).Str("idempotency_key", key).Msg("failed to buffer idempotent response")
+				zerolog.Ctx(ctx).Error().Err(recorder.err).Str("idempotency_key", key).Msg("failed to buffer idempotent response")
 				api.Error(w, http.StatusInternalServerError, "IDEMPOTENCY_RESPONSE_TOO_LARGE", "the response could not be buffered for idempotent replay")
 				return
 			}
@@ -201,7 +208,7 @@ func MiddlewareWithOptions(repo Repository, opts Options) func(http.Handler) htt
 			err = repo.Complete(completeCtx, acquisition.Record.ID, acquisition.Record.LeaseToken, recordedResponse, opts.Now().UTC().Add(opts.TTL))
 			cancel()
 			if err != nil {
-				zerolog.Ctx(r.Context()).Error().Err(err).Str("idempotency_key", key).Msg("failed to persist idempotent response")
+				zerolog.Ctx(ctx).Error().Err(err).Str("idempotency_key", key).Msg("failed to persist idempotent response")
 				api.Error(w, http.StatusInternalServerError, "IDEMPOTENCY_RECORD_PERSISTENCE_FAILED", "the operation completed but its idempotency record could not be persisted; retry with the same key")
 				return
 			}
@@ -275,16 +282,45 @@ func isReplayableHeader(name string) bool {
 	}
 }
 
-// ExtractKey reads the idempotency key from X-Idempotency-Key or
-// Idempotency-Key header.
+// ErrConflictingKeys is returned when both idempotency headers carry different
+// values: which one wins would otherwise depend on the endpoint.
+var ErrConflictingKeys = errors.New("conflicting Idempotency-Key and X-Idempotency-Key headers")
+
+// GetIdempotencyKey resolves the idempotency key for a request.
+//
+// Idempotency-Key is the canonical header; X-Idempotency-Key is a documented
+// alias kept for older clients. Handlers must not read either header directly —
+// they read the key the middleware put on the request context with
+// IdempotencyKeyFromContext. Sending both with different values is a client
+// error, not a precedence question.
+func GetIdempotencyKey(r *http.Request) (string, error) {
+	canonical := strings.TrimSpace(r.Header.Get(headerKey))
+	alias := strings.TrimSpace(r.Header.Get(xHeaderKey))
+
+	switch {
+	case canonical == "" && alias == "":
+		return "", nil
+	case canonical != "" && alias != "" && canonical != alias:
+		return "", ErrConflictingKeys
+	case canonical != "":
+		return canonical, nil
+	default:
+		return alias, nil
+	}
+}
+
+// ExtractKey returns the idempotency key from the request headers, preferring
+// the canonical Idempotency-Key. It ignores the conflict case (returning the
+// canonical value when both are present); use GetIdempotencyKey when a
+// conflicting pair must be rejected.
 func ExtractKey(r *http.Request) string {
-	if k := r.Header.Get(xHeaderKey); k != "" {
-		return k
+	key, err := GetIdempotencyKey(r)
+	if err != nil {
+		if canonical := strings.TrimSpace(r.Header.Get(headerKey)); canonical != "" {
+			return canonical
+		}
 	}
-	if k := r.Header.Get(headerKey); k != "" {
-		return k
-	}
-	return ""
+	return key
 }
 
 // DeterministicKey returns a valid UUID string derived deterministically from raw.
@@ -340,4 +376,16 @@ func WithRecordID(ctx context.Context, recordID string) context.Context {
 func RecordIDFromContext(ctx context.Context) string {
 	recordID, _ := ctx.Value(recordIDContextKey{}).(string)
 	return recordID
+}
+
+type idempotencyKeyContextKey struct{}
+
+func withIdempotencyKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, idempotencyKeyContextKey{}, key)
+}
+
+// IdempotencyKeyFromContext returns the idempotency key for the current request.
+func IdempotencyKeyFromContext(ctx context.Context) string {
+	k, _ := ctx.Value(idempotencyKeyContextKey{}).(string)
+	return k
 }

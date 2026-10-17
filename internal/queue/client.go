@@ -21,8 +21,16 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) EnqueueTransfer(ctx context.Context, txID string) error {
+	return c.EnqueueBatchTransfer(ctx, txID, "")
+}
+
+// EnqueueBatchTransfer queues settlement for one transfer of a batch, with the
+// batch id attached to the task payload as required by the batch contract.
+// An empty batchID produces the plain transfer task.
+func (c *Client) EnqueueBatchTransfer(ctx context.Context, txID, batchID string) error {
 	payload, err := json.Marshal(ProcessTransferPayload{
 		TransactionID: txID,
+		BatchID:       batchID,
 		Trace:         traceContext(ctx),
 	})
 	if err != nil {

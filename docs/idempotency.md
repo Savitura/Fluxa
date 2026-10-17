@@ -8,7 +8,11 @@ succeeded server-side. Retrying blindly risks double-processing — e.g. a
 second `POST /v1/transfers` that moves the same funds twice.
 
 An idempotency key breaks that ambiguity. The client generates a unique key
-once per _logical_ operation and sends it as the `X-Idempotency-Key` (or `Idempotency-Key`) header.
+once per _logical_ operation and sends it in the `Idempotency-Key` header.
+`X-Idempotency-Key` is accepted as a legacy alias for the same value; sending
+both headers with **different** values is rejected with `400`
+(`IDEMPOTENCY_KEY_CONFLICT`) instead of letting one endpoint prefer one header
+and another endpoint the other.
 Fluxa remembers the outcome of the first request under that key for 24 hours
 (configurable via `IDEMPOTENCY_TTL_HOURS`); any retry with the same key and the
 same request body gets back the exact same response, byte for byte, without the
@@ -30,6 +34,20 @@ payment processors.
 | `POST` | `/v1/claimable-balances/:id/claim` | `Idempotency-Key` or `X-Idempotency-Key` | Claimable balance claiming                                                      |
 
 Read-only endpoints (e.g. `GET /v1/transfers/:id`) never require or use the header.
+
+## Header rules
+
+| Sent by the client | Result |
+| --- | --- |
+| `Idempotency-Key: k` | Used as-is (canonical header). |
+| `X-Idempotency-Key: k` | Accepted as an alias; the value is used as the key. |
+| Both, same value | Accepted; the canonical value is used. |
+| Both, different values | `400` `IDEMPOTENCY_KEY_CONFLICT` — resolve the conflict client-side. |
+| Neither, on an endpoint that requires a key | `400` `IDEMPOTENCY_KEY_REQUIRED`. |
+
+The header is resolved in one place (`internal/server/idempotency`), so every
+endpoint behaves the same way; handlers read the key from the request context
+rather than from the headers themselves.
 
 ## Generating a key
 

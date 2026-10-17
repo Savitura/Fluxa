@@ -2,7 +2,7 @@
 
 This guide walks through the complete integration flow — from creating an account to receiving a webhook notification. Every step includes the exact `curl` command, the expected response, and what to watch out for.
 
-> **Prerequisites**: You need `curl` and `jq` installed. Run Fluxa locally using Docker or from source (see the main [README](../README.md)).
+> **Prerequisites**: You need `curl` and `jq` installed. Run Fluxa locally using Docker or from source (see the main [README](../README.md#running-locally)).
 
 ---
 

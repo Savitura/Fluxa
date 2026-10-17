@@ -25,6 +25,16 @@ func TxFromContext(ctx context.Context, defaultDB DB) DB {
 	return defaultDB
 }
 
+// AmbientTx returns the transaction RunInTx placed on ctx, if any. It lets
+// helpers that manage their own Begin/Commit (the limit-checked inserts)
+// reuse an open transaction instead of nesting a second one on another
+// connection, which would neither be atomic with the caller nor able to see
+// its uncommitted rows.
+func AmbientTx(ctx context.Context) (pgx.Tx, bool) {
+	tx, ok := ctx.Value(txKey{}).(pgx.Tx)
+	return tx, ok
+}
+
 func RunInTx(ctx context.Context, db DB, fn func(context.Context) error) error {
 	tx, err := db.Begin(ctx)
 	if err != nil {

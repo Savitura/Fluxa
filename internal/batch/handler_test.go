@@ -3,12 +3,14 @@ package batch
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/api"
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/server/idempotency"
 	"github.com/fluxa/fluxa/internal/tenant"
@@ -18,20 +20,26 @@ import (
 
 // fakeService implements Service, counting how many times CreateBatch
 // actually runs so tests can tell a replayed idempotent response apart from
-// a reprocessed one.
+// a reprocessed one. createErr, when set, is returned instead of a result.
 type fakeService struct {
 	mu         sync.Mutex
 	createHits int
+	createErr  error
 }
 
 func (f *fakeService) CreateBatch(_ context.Context, fromWalletID string, items []Item) (*Result, error) {
 	f.mu.Lock()
 	f.createHits++
+	err := f.createErr
 	f.mu.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
 
 	now := time.Now().UTC()
 	return &Result{
-		Batch: &domain.Batch{
+		Batch: &domain.BatchTransfer{
 			ID:         "batch-1",
 			Status:     domain.BatchStatusPending,
 			TotalCount: len(items),
@@ -196,5 +204,55 @@ func TestCreateBatchNormalizesClientSuppliedKey(t *testing.T) {
 	}
 	if first.Body.String() != second.Body.String() {
 		t.Fatalf("expected identical replayed response, got %q vs %q", first.Body.String(), second.Body.String())
+	}
+}
+
+// The accepted response is the issue's contract: batch_id plus the transfer
+// ids accepted for settlement.
+func TestCreateBatchAcceptedResponseCarriesBatchAndTransferIDs(t *testing.T) {
+	svc := &fakeService{}
+	router := newBatchRouter(svc, newMockIdemRepo())
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, newBatchRequest(t, uuid.New().String()))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if body["batch_id"] != "batch-1" {
+		t.Fatalf("batch_id = %v, want batch-1", body["batch_id"])
+	}
+	if _, ok := body["transfer_ids"].([]interface{}); !ok {
+		t.Fatalf("transfer_ids = %v, want array", body["transfer_ids"])
+	}
+}
+
+// The service's pre-validation pass surfaces as 400 with per-row details, the
+// same shape as the syntactic checks.
+func TestCreateBatchServiceValidationErrorsReturn400(t *testing.T) {
+	svc := &fakeService{createErr: &BatchValidationError{Errors: []ValidationError{
+		{Row: 1, Field: "to_wallet_id", Value: "wallet-x", Reason: "wallet not found"},
+	}}}
+	router := newBatchRouter(svc, newMockIdemRepo())
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, newBatchRequest(t, uuid.New().String()))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Message          string                      `json:"message"`
+		ValidationErrors []api.ValidationErrorDetail `json:"validation_errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(body.ValidationErrors) != 1 || body.ValidationErrors[0].Field != "to_wallet_id" || body.ValidationErrors[0].Row != 1 {
+		t.Fatalf("validation_errors = %+v, want row 1 to_wallet_id", body.ValidationErrors)
 	}
 }
