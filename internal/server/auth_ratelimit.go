@@ -154,7 +154,7 @@ func (l *AuthRateLimiter) Limit(extractor AccountExtractor) func(http.Handler) h
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// 1. Enforce Per-IP Limit
-			ipKey := r.RemoteAddr
+			ipKey := extractClientIP(r)
 			allowed, retryAfter := l.allow(l.ipVisitors, l.ipRPS, l.ipBurst, ipKey)
 			if !allowed {
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))

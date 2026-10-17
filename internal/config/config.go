@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -101,6 +102,7 @@ type Config struct {
 	IndexerStreamShardCount  int
 	IndexerStreamShardIndex  int
 	IndexerMetricsPort       string
+	TrustedProxyCIDRs        []netip.Prefix
 
 	// Auth rate limiting configuration for /v1/auth/register, /v1/auth/login, /v1/org/invites/accept
 	AuthRateLimitIPRPS        float64
@@ -300,6 +302,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("AUTH_RATE_LIMIT_IP_BURST", "10")
 	viper.SetDefault("AUTH_RATE_LIMIT_ACCOUNT_RPS", "1")
 	viper.SetDefault("AUTH_RATE_LIMIT_ACCOUNT_BURST", "5")
+	viper.SetDefault("TRUSTED_PROXY_CIDRS", "")
 
 	viper.SetConfigFile(".env")
 	viper.SetConfigType("env")
@@ -361,6 +364,10 @@ func Load() (*Config, error) {
 	authRateLimitAccountBurst := viper.GetInt("AUTH_RATE_LIMIT_ACCOUNT_BURST")
 	if authRateLimitAccountBurst <= 0 {
 		authRateLimitAccountBurst = 5
+	}
+	trustedProxyCIDRs, err := parseCIDRs(splitCSV(viper.GetString("TRUSTED_PROXY_CIDRS")))
+	if err != nil {
+		return nil, fmt.Errorf("TRUSTED_PROXY_CIDRS: %w", err)
 	}
 
 	if webhookAllowPrivateNetworks && env != "development" {
@@ -435,6 +442,7 @@ func Load() (*Config, error) {
 		IndexerStreamShardCount:         viper.GetInt("INDEXER_STREAM_SHARD_COUNT"),
 		IndexerStreamShardIndex:         viper.GetInt("INDEXER_STREAM_SHARD_INDEX"),
 		IndexerMetricsPort:              viper.GetString("INDEXER_METRICS_PORT"),
+		TrustedProxyCIDRs:               trustedProxyCIDRs,
 		ClaimableBalanceSourceWalletID:  viper.GetString("CLAIMABLE_BALANCE_SOURCE_WALLET_ID"),
 		IdempotencyTTLHours: func() int {
 			h := viper.GetInt("IDEMPOTENCY_TTL_HOURS")
@@ -455,6 +463,18 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func parseCIDRs(values []string) ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q: %w", value, err)
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes, nil
 }
 
 // validateKeyEntropy checks that the encryption key has sufficient entropy.

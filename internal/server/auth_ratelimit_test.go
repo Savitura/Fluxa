@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/org"
+	"github.com/fluxa/fluxa/internal/paymentlink"
 	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/schedule"
 	"github.com/fluxa/fluxa/internal/server"
@@ -64,7 +66,7 @@ func (d *dummyOrgService) RemoveMember(ctx context.Context, memberID string) err
 	return nil
 }
 
-func setupTestServerWithRateLimit(cfg server.AuthRateLimitConfig) *chi.Mux {
+func setupTestServerWithRateLimit(cfg server.AuthRateLimitConfig, options ...interface{}) *chi.Mux {
 	authH := auth.NewHandler(&dummyAuthService{})
 	orgH := org.NewHandler(&dummyOrgService{})
 
@@ -97,10 +99,29 @@ func setupTestServerWithRateLimit(cfg server.AuthRateLimitConfig) *chi.Mux {
 		nil,
 		nil,
 		nil,
-		cfg,
+		append([]interface{}{cfg}, options...)...,
 	)
 	return srv.Router()
 }
+
+type emptyPaymentLinkRepository struct{}
+
+func (emptyPaymentLinkRepository) Create(context.Context, *paymentlink.Link) error { return nil }
+func (emptyPaymentLinkRepository) GetByIdempotencyKey(context.Context, string) (*paymentlink.Link, error) {
+	return nil, paymentlink.ErrNotFound
+}
+func (emptyPaymentLinkRepository) List(context.Context) ([]*paymentlink.Link, error) { return nil, nil }
+func (emptyPaymentLinkRepository) Get(context.Context, string) (*paymentlink.Link, error) {
+	return nil, paymentlink.ErrNotFound
+}
+func (emptyPaymentLinkRepository) GetPublic(context.Context, string) (*paymentlink.Link, error) {
+	return nil, paymentlink.ErrNotFound
+}
+func (emptyPaymentLinkRepository) Claim(context.Context, string) (*paymentlink.Link, error) {
+	return nil, paymentlink.ErrNotAvailable
+}
+func (emptyPaymentLinkRepository) Release(context.Context, string) error { return nil }
+func (emptyPaymentLinkRepository) Cancel(context.Context, string) error  { return nil }
 
 func TestAuthRateLimiter_PerIPLimiting(t *testing.T) {
 	// Configure low burst for testing: IP burst 3, Account burst 10
@@ -158,6 +179,107 @@ func TestAuthRateLimiter_PerIPLimiting(t *testing.T) {
 	router.ServeHTTP(recOtherIP, reqOtherIP)
 	if recOtherIP.Code != http.StatusOK {
 		t.Fatalf("expected status 200 from different IP, got %d", recOtherIP.Code)
+	}
+}
+
+func TestAuthRateLimiter_IgnoresSpoofedForwardedFor(t *testing.T) {
+	router := setupTestServerWithRateLimit(server.AuthRateLimitConfig{IPRPS: 1, IPBurst: 1, AccountRPS: 10, AccountBurst: 10})
+	for i, forwardedIP := range []string{"198.51.100.1", "198.51.100.2"} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewBufferString(`{"email":"user`+strconv.Itoa(i)+`@example.com","password":"password123"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", forwardedIP)
+		req.RemoteAddr = "192.0.2.10:1234"
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if i == 0 && rec.Code != http.StatusOK {
+			t.Fatalf("first request status = %d, want 200", rec.Code)
+		}
+		if i == 1 && rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("spoofed X-Forwarded-For changed the rate-limit key: status = %d, want 429", rec.Code)
+		}
+	}
+}
+
+func TestAuthRateLimiter_UsesForwardedForFromTrustedProxy(t *testing.T) {
+	trustedProxy := server.TrustedProxyConfig{CIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}
+	router := setupTestServerWithRateLimit(server.AuthRateLimitConfig{IPRPS: 1, IPBurst: 1, AccountRPS: 10, AccountBurst: 10}, trustedProxy)
+	for i, forwardedIP := range []string{"198.51.100.1", "198.51.100.2"} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewBufferString(`{"email":"proxy`+strconv.Itoa(i)+`@example.com","password":"password123"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", forwardedIP)
+		req.RemoteAddr = "192.0.2.10:1234"
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request from forwarded IP %s status = %d, want 200", forwardedIP, rec.Code)
+		}
+	}
+}
+
+func TestAuthRefreshIsRateLimitedAndMetricsAreNotPublic(t *testing.T) {
+	router := setupTestServerWithRateLimit(server.AuthRateLimitConfig{IPRPS: 1, IPBurst: 1, AccountRPS: 10, AccountBurst: 10})
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh", bytes.NewBufferString(`{"refresh_token":"token"}`))
+		req.RemoteAddr = "192.0.2.20:1234"
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		want := http.StatusOK
+		if i == 1 {
+			want = http.StatusTooManyRequests
+		}
+		if rec.Code != want {
+			t.Fatalf("refresh request %d status = %d, want %d", i+1, rec.Code, want)
+		}
+	}
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metricsRec := httptest.NewRecorder()
+	router.ServeHTTP(metricsRec, metricsReq)
+	if metricsRec.Code != http.StatusNotFound {
+		t.Fatalf("GET /metrics status = %d, want 404", metricsRec.Code)
+	}
+}
+
+func TestPublicPaymentLinkCheckoutHasTighterRateLimit(t *testing.T) {
+	handler := paymentlink.NewHandler(paymentlink.NewService(emptyPaymentLinkRepository{}, nil))
+	router := setupTestServerWithRateLimit(server.DefaultAuthRateLimitConfig(), handler)
+
+	for i := 0; i < 4; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/v1/public/payment-links/token/checkout", bytes.NewBufferString(`{"email":"buyer@example.com","name":"Buyer"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "192.0.2.30:1234"
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		want := http.StatusConflict
+		if i == 3 {
+			want = http.StatusTooManyRequests
+		}
+		if rec.Code != want {
+			t.Fatalf("checkout request %d status = %d, want %d", i+1, rec.Code, want)
+		}
+	}
+
+	otherIPReq := httptest.NewRequest(http.MethodPost, "/v1/public/payment-links/token/checkout", bytes.NewBufferString(`{"email":"buyer@example.com","name":"Buyer"}`))
+	otherIPReq.Header.Set("Content-Type", "application/json")
+	otherIPReq.RemoteAddr = "192.0.2.31:1234"
+	otherIPRec := httptest.NewRecorder()
+	router.ServeHTTP(otherIPRec, otherIPReq)
+	if otherIPRec.Code != http.StatusConflict {
+		t.Fatalf("checkout from a different IP status = %d, want 409 (not rate limited)", otherIPRec.Code)
+	}
+
+	for i := 0; i < 21; i++ {
+		readReq := httptest.NewRequest(http.MethodGet, "/v1/public/payment-links/token", nil)
+		readReq.RemoteAddr = "192.0.2.30:1234"
+		readRec := httptest.NewRecorder()
+		router.ServeHTTP(readRec, readReq)
+		want := http.StatusNotFound
+		if i == 20 {
+			want = http.StatusTooManyRequests
+		}
+		if readRec.Code != want {
+			t.Fatalf("public link read request %d status = %d, want %d", i+1, readRec.Code, want)
+		}
 	}
 }
 

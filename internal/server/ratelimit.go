@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +16,12 @@ import (
 )
 
 const maxIdleTime = 5 * time.Minute
+
+type TrustedProxyConfig struct {
+	CIDRs []netip.Prefix
+}
+
+type clientIPContextKey struct{}
 
 type visitorEntry struct {
 	rateLimiter *rate.Limiter
@@ -69,27 +77,101 @@ func (rl *rateLimiter) cleanup() {
 	}
 }
 
-func extractClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		if len(parts) > 0 {
-			ip := strings.TrimSpace(parts[0])
-			if ip != "" {
-				return ip
-			}
-		}
-	}
-	if xrip := r.Header.Get("X-Real-IP"); xrip != "" {
-		ip := strings.TrimSpace(xrip)
-		if ip != "" {
-			return ip
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+func remoteIP(remoteAddr string) netip.Addr {
+	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = remoteAddr
 	}
-	return host
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return ip.Unmap()
+}
+
+func isTrustedProxy(ip netip.Addr, trustedProxies []netip.Prefix) bool {
+	for _, prefix := range trustedProxies {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func clientIP(r *http.Request, trustedProxies []netip.Prefix) netip.Addr {
+	peer := remoteIP(r.RemoteAddr)
+	if !peer.IsValid() || !isTrustedProxy(peer, trustedProxies) {
+		return peer
+	}
+
+	current := peer
+	forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for i := len(forwarded) - 1; i >= 0; i-- {
+		if !isTrustedProxy(current, trustedProxies) {
+			break
+		}
+		forwardedIP, err := netip.ParseAddr(strings.TrimSpace(forwarded[i]))
+		if err != nil {
+			break
+		}
+		current = forwardedIP.Unmap()
+	}
+	return current
+}
+
+func clientIPMiddleware(trustedProxies []netip.Prefix) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := clientIP(r, trustedProxies)
+			if ip.IsValid() {
+				r = r.WithContext(context.WithValue(r.Context(), clientIPContextKey{}, ip))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func extractClientIP(r *http.Request) string {
+	if ip, ok := r.Context().Value(clientIPContextKey{}).(netip.Addr); ok {
+		return ip.String()
+	}
+	if ip := remoteIP(r.RemoteAddr); ip.IsValid() {
+		return ip.String()
+	}
+	return r.RemoteAddr
+}
+
+func IPRateLimit(rps float64, burst int) func(http.Handler) http.Handler {
+	visitors := newRateLimiter(rps, burst)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			limiter := visitors.getLimiter(extractClientIP(r))
+			reservation := limiter.Reserve()
+			delay := reservation.Delay()
+			if !reservation.OK() || delay > 0 {
+				reservation.Cancel()
+				delaySeconds := int(delay.Seconds()) + 1
+				if delaySeconds < 1 {
+					delaySeconds = 1
+				}
+				w.Header().Set("Retry-After", strconv.Itoa(delaySeconds))
+				w.Header().Set("RateLimit-Limit", strconv.Itoa(burst))
+				w.Header().Set("RateLimit-Remaining", "0")
+				w.Header().Set("RateLimit-Reset", strconv.Itoa(delaySeconds))
+				api.Error(w, http.StatusTooManyRequests, "RATE_LIMITED", "rate limit exceeded")
+				return
+			}
+
+			remaining := int(limiter.Tokens())
+			if remaining < 0 {
+				remaining = 0
+			}
+			w.Header().Set("RateLimit-Limit", strconv.Itoa(burst))
+			w.Header().Set("RateLimit-Remaining", strconv.Itoa(remaining))
+			w.Header().Set("RateLimit-Reset", "1")
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // RateLimit returns a middleware that limits requests per-tenant (or per-IP for unauthenticated).

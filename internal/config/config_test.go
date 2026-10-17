@@ -214,3 +214,17 @@ func TestLoad_AuthRateLimitDefaultsAndOverrides(t *testing.T) {
 		}
 	})
 }
+
+func TestLoad_TrustedProxyCIDRs(t *testing.T) {
+	cfg, err := loadWith(t, map[string]string{"TRUSTED_PROXY_CIDRS": "10.0.0.0/8,2001:db8::/32"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 || cfg.TrustedProxyCIDRs[0].String() != "10.0.0.0/8" || cfg.TrustedProxyCIDRs[1].String() != "2001:db8::/32" {
+		t.Fatalf("TrustedProxyCIDRs = %v, want [10.0.0.0/8 2001:db8::/32]", cfg.TrustedProxyCIDRs)
+	}
+
+	if _, err := loadWith(t, map[string]string{"TRUSTED_PROXY_CIDRS": "not-a-cidr"}); err == nil {
+		t.Fatal("invalid trusted proxy CIDR should fail configuration loading")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -37,7 +38,6 @@ import (
 	"github.com/fluxa/fluxa/internal/wallet_balance_alert"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 )
 
 type Server struct {
@@ -85,10 +85,13 @@ func New(
 	var tenantDataHandler *tenantdata.Handler
 	var idempotencyHandler *idempotency.Handler
 	var scopeDenialRecorder ScopeDenialRecorder
+	var trustedProxies []netip.Prefix
 	for _, option := range options {
 		switch value := option.(type) {
 		case AuthRateLimitConfig:
 			rateCfg = value
+		case TrustedProxyConfig:
+			trustedProxies = value.CIDRs
 		case *beneficiary.Handler:
 			beneficiaryHandler = value
 		case *wallet_balance_alert.Handler:
@@ -112,7 +115,7 @@ func New(
 		r.Use(WithScopeDenialRecorder(scopeDenialRecorder))
 	}
 
-	r.Use(middleware.RealIP)
+	r.Use(clientIPMiddleware(trustedProxies))
 	r.Use(requestID)
 	r.Use(logger)
 	r.Use(recoverer)
@@ -143,7 +146,6 @@ func New(
 	r.Get("/health", healthService.Handler())
 	r.Get("/health/ready", healthService.ReadyHandler())
 	r.Get("/health/live", fluxahealth.LiveHandler())
-	r.Get("/metrics", MetricsHandler)
 
 	// Platform status is intentionally public and must remain outside tenant
 	// authentication.
@@ -154,12 +156,12 @@ func New(
 	r.Route("/v1", func(r chi.Router) {
 		// Unauthenticated public endpoints
 		if paymentLinkHandler != nil {
-			r.Route("/public/payment-links", paymentLinkHandler.PublicRoutes())
+			r.Route("/public/payment-links", paymentLinkHandler.PublicRoutes(IPRateLimit(10, 20), IPRateLimit(1, 3)))
 		}
 		r.Route("/auth", func(r chi.Router) {
 			r.With(authLimiter.Limit(ExtractEmail)).Post("/register", authHandler.Register)
 			r.With(authLimiter.Limit(ExtractEmail)).Post("/login", authHandler.Login)
-			r.Post("/refresh", authHandler.Refresh)
+			r.With(authLimiter.Limit(nil)).Post("/refresh", authHandler.Refresh)
 		})
 		r.With(authLimiter.Limit(ExtractInviteToken)).Post("/org/invites/accept", orgHandler.AcceptInvite)
 		// Registered as a direct path because the authenticated group mounts /webhooks

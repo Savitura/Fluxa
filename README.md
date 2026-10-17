@@ -43,6 +43,7 @@ Key variables include:
 - `PLATFORM_FEE_WALLET_PUBLIC_KEY`: The wallet that collects platform fees.
 - `ADMIN_API_KEY`: API key for administrative endpoints.
 - `FLUTTERWAVE_SECRET_KEY`: Key for fiat deposits/withdrawals via Flutterwave (set to `mock` for local dev).
+- `TRUSTED_PROXY_CIDRS`: Comma-separated proxy network CIDRs whose `X-Forwarded-For` headers the API trusts. Leave unset when connecting directly.
 
 ### API Keys
 

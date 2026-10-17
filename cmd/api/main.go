@@ -459,6 +459,7 @@ func main() {
 			AccountRPS:   cfg.AuthRateLimitAccountRPS,
 			AccountBurst: cfg.AuthRateLimitAccountBurst,
 		},
+		server.TrustedProxyConfig{CIDRs: cfg.TrustedProxyCIDRs},
 		beneficiaryHandler,
 		walletBalanceAlertHandler,
 		paymentLinkHandler,

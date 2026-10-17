@@ -8,9 +8,9 @@ import (
 
 	"github.com/fluxa/fluxa/internal/api"
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/server/idempotency"
 	"github.com/go-chi/chi/v5"
 	"github.com/shopspring/decimal"
-	"github.com/fluxa/fluxa/internal/server/idempotency"
 )
 
 type AuditLogger interface {
@@ -48,10 +48,10 @@ func (h *Handler) Routes(read, write func(http.Handler) http.Handler) func(chi.R
 	}
 }
 
-func (h *Handler) PublicRoutes() func(chi.Router) {
+func (h *Handler) PublicRoutes(readLimit, checkoutLimit func(http.Handler) http.Handler) func(chi.Router) {
 	return func(r chi.Router) {
-		r.Get("/{token}", h.getPublic)
-		r.Post("/{token}/checkout", h.checkout)
+		r.With(readLimit).Get("/{token}", h.getPublic)
+		r.With(checkoutLimit).Post("/{token}/checkout", h.checkout)
 	}
 }
 
