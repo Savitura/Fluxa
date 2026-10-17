@@ -25,6 +25,12 @@ const (
 	// TypeExpireClaimableBalances sweeps claimable balances past their expiry
 	// and revokes the ones flagged revoke_on_expiry.
 	TypeExpireClaimableBalances = "claimable:expire"
+	// TypeExpireTransferApprovals expires pending transfer approvals past
+	// expires_at and fails their held transactions.
+	TypeExpireTransferApprovals = "transfer_approval:expire"
+	// TypeReleaseStalePaymentLinks returns payment links whose checkout was
+	// abandoned (stuck in processing with no payment) to active.
+	TypeReleaseStalePaymentLinks = "payment_link:release_stale"
 )
 
 type TraceContext struct {

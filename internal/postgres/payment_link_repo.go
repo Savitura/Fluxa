@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/paymentlink"
@@ -131,6 +132,32 @@ func (r *PaymentLinkRepo) Release(ctx context.Context, id string) error {
 		return fmt.Errorf("release payment link: %w", err)
 	}
 	return nil
+}
+
+// ReleaseStale returns up to limit links that have sat in processing since
+// before claimedBefore back to active, for checkouts the payer abandoned. A
+// link is only released while none of its deposits has progressed past
+// pending (i.e. the provider has not seen a payment); those are settled by the
+// fiat webhook instead. Released links past expires_at read as expired. SKIP
+// LOCKED keeps concurrent sweeps and checkouts from blocking each other.
+func (r *PaymentLinkRepo) ReleaseStale(ctx context.Context, claimedBefore time.Time, limit int) (int, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE payment_links SET status = 'active', updated_at = NOW()
+		WHERE id IN (
+			SELECT pl.id FROM payment_links pl
+			WHERE pl.status = 'processing' AND pl.updated_at <= $1
+			  AND NOT EXISTS (
+				SELECT 1 FROM fiat_deposits d
+				WHERE d.payment_link_id = pl.id AND d.status IN ('processing', 'completed')
+			  )
+			ORDER BY pl.updated_at
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		) AND status = 'processing'`, claimedBefore, limit)
+	if err != nil {
+		return 0, fmt.Errorf("release stale payment links: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 func (r *PaymentLinkRepo) Cancel(ctx context.Context, id string) error {

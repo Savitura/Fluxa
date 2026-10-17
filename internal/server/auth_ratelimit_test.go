@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/anchor"
 	"github.com/fluxa/fluxa/internal/apikey"
@@ -122,6 +123,9 @@ func (emptyPaymentLinkRepository) Claim(context.Context, string) (*paymentlink.L
 }
 func (emptyPaymentLinkRepository) Release(context.Context, string) error { return nil }
 func (emptyPaymentLinkRepository) Cancel(context.Context, string) error  { return nil }
+func (emptyPaymentLinkRepository) ReleaseStale(context.Context, time.Time, int) (int, error) {
+	return 0, nil
+}
 
 func TestAuthRateLimiter_PerIPLimiting(t *testing.T) {
 	// Configure low burst for testing: IP burst 3, Account burst 10

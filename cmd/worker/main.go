@@ -18,6 +18,7 @@ import (
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/indexer"
 	"github.com/fluxa/fluxa/internal/logging"
+	"github.com/fluxa/fluxa/internal/paymentlink"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
 	"github.com/fluxa/fluxa/internal/reconcile"
@@ -26,6 +27,7 @@ import (
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/tracing"
 	"github.com/fluxa/fluxa/internal/transfer"
+	"github.com/fluxa/fluxa/internal/transferapproval"
 	"github.com/fluxa/fluxa/internal/treasury"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/hibiken/asynq"
@@ -142,6 +144,7 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		_, _ = fmt.Fprintf(w, "# HELP fluxa_indexer_active_streams Active Horizon payment streams.\n# TYPE fluxa_indexer_active_streams gauge\nfluxa_indexer_active_streams %d\n", idx.ActiveStreams())
+		_, _ = fmt.Fprintf(w, "# HELP fluxa_audit_write_failures_total Transfer audit entries that failed to persist.\n# TYPE fluxa_audit_write_failures_total counter\nfluxa_audit_write_failures_total %d\n", transfer.AuditWriteFailures())
 	})
 	metricsServer := &http.Server{Addr: ":" + cfg.IndexerMetricsPort, Handler: metricsMux}
 	go func() {
@@ -271,6 +274,15 @@ func main() {
 	)
 	claimableWorker := claimable.NewWorker(claimableSvc)
 
+	transferApprovalWorker := transferapproval.NewWorker(
+		transferapproval.NewService(postgres.NewTransferApprovalRepo(repoDB), qClient).WithWebhooks(webhookSvc),
+	)
+	// The worker never runs checkouts, so the payment link service needs no depositor.
+	paymentLinkWorker := paymentlink.NewWorker(
+		paymentlink.NewService(postgres.NewPaymentLinkRepo(repoDB), nil),
+		parseDuration(cfg.PaymentLinkCheckoutTimeout, paymentlink.DefaultCheckoutTimeout),
+	)
+
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, qClient)
 
 	// The worker screens too: scheduled payouts run here and go through
@@ -367,6 +379,8 @@ func main() {
 	mux.HandleFunc(queue.TypeRunSchedules, scheduleWorker.HandleRunSchedules)
 	mux.HandleFunc(queue.TypeTreasurySweep, treasuryWorker.HandleSweep)
 	mux.HandleFunc(queue.TypeExpireClaimableBalances, claimableWorker.HandleExpiry)
+	mux.HandleFunc(queue.TypeExpireTransferApprovals, transferApprovalWorker.HandleExpiry)
+	mux.HandleFunc(queue.TypeReleaseStalePaymentLinks, paymentLinkWorker.HandleReleaseStale)
 	if complianceWorker != nil {
 		mux.HandleFunc(queue.TypeRefreshSanctions, complianceWorker.HandleRefreshSanctions)
 	}
@@ -414,6 +428,21 @@ func main() {
 	claimableExpiryTask := asynq.NewTask(queue.TypeExpireClaimableBalances, nil)
 	if _, err := scheduler.Register("@every 5m", claimableExpiryTask); err != nil {
 		log.Fatal().Err(err).Msg("register claimable balance expiry scheduler")
+	}
+
+	// Approval expiry used to happen only when someone listed approvals or
+	// voted, so unattended requests stayed approval_pending forever. A
+	// one-minute sweep fails them close to expires_at.
+	approvalExpiryTask := asynq.NewTask(queue.TypeExpireTransferApprovals, nil)
+	if _, err := scheduler.Register("@every 1m", approvalExpiryTask); err != nil {
+		log.Fatal().Err(err).Msg("register transfer approval expiry scheduler")
+	}
+
+	// Abandoned payment link checkouts are released on the low queue; the
+	// timeout (PAYMENT_LINK_CHECKOUT_TIMEOUT) bounds how long a link is unusable.
+	paymentLinkReleaseTask := asynq.NewTask(queue.TypeReleaseStalePaymentLinks, nil, asynq.Queue("low"))
+	if _, err := scheduler.Register("@every 5m", paymentLinkReleaseTask); err != nil {
+		log.Fatal().Err(err).Msg("register payment link release scheduler")
 	}
 
 	// The OFAC SDN list is republished on business days; a daily refresh on the

@@ -5551,7 +5551,12 @@ components:
           type: string
         creator_id:
           type: string
-          description: API key or user that initiated the transfer.
+          description: User that initiated the transfer. Omitted when the transfer was
+            created with an API key. The creator can never approve their own transfer.
+        creator_api_key_id:
+          type: string
+          description: API key that initiated the transfer, when it was not created by
+            a dashboard user.
         asset:
           type: string
         amount:

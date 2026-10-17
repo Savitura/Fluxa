@@ -10,6 +10,7 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
 )
 
@@ -21,6 +22,12 @@ type Repository interface {
 	CreateRequest(context.Context, *domain.TransferApprovalRequest) error
 	ListRequests(context.Context, string, string, int, int) ([]*domain.TransferApprovalRequest, int, error)
 	CastVote(context.Context, string, string, string, string, string) (*domain.TransferApprovalRequest, bool, error)
+	ExpirePending(context.Context, int) ([]domain.ExpiredTransferApproval, error)
+}
+
+// WebhookDispatcher delivers tenant webhooks; the tenant comes from ctx.
+type WebhookDispatcher interface {
+	Dispatch(ctx context.Context, eventType domain.EventType, payload interface{}) error
 }
 
 type Enqueuer interface {
@@ -28,13 +35,73 @@ type Enqueuer interface {
 }
 
 type Service struct {
-	repo  Repository
-	queue Enqueuer
-	now   func() time.Time
+	repo     Repository
+	queue    Enqueuer
+	webhooks WebhookDispatcher
+	now      func() time.Time
+}
+
+// expiryBatchSize bounds each ExpirePending statement so one sweep never holds
+// locks on an unbounded number of rows.
+const expiryBatchSize = 500
+
+// ExpiryReport summarises one expiry sweep.
+type ExpiryReport struct {
+	Expired            int
+	TransactionsFailed int
 }
 
 func NewService(repo Repository, queue Enqueuer) *Service {
 	return &Service{repo: repo, queue: queue, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// WithWebhooks enables transfer.failed webhooks for transfers whose approval
+// expires in the background sweep.
+func (s *Service) WithWebhooks(webhooks WebhookDispatcher) *Service {
+	s.webhooks = webhooks
+	return s
+}
+
+// ExpireDue expires every pending approval request past its expires_at and
+// fails the held transaction, so funds are not left looking committed when
+// nobody opens the approvals list. Tenants are told via transfer.failed.
+func (s *Service) ExpireDue(ctx context.Context) (ExpiryReport, error) {
+	var report ExpiryReport
+	for {
+		expired, err := s.repo.ExpirePending(ctx, expiryBatchSize)
+		if err != nil {
+			return report, err
+		}
+		for _, e := range expired {
+			report.Expired++
+			if !e.TransactionFailed {
+				continue
+			}
+			report.TransactionsFailed++
+			s.dispatchExpired(ctx, e)
+		}
+		if len(expired) < expiryBatchSize {
+			return report, nil
+		}
+	}
+}
+
+func (s *Service) dispatchExpired(ctx context.Context, e domain.ExpiredTransferApproval) {
+	if s.webhooks == nil {
+		return
+	}
+	payload := map[string]interface{}{
+		"transaction_id":      e.TransactionID,
+		"event":               domain.EventTransferFailed,
+		"amount":              e.Amount.String(),
+		"asset":               e.Asset,
+		"failure_reason":      "approval expired",
+		"approval_request_id": e.RequestID,
+	}
+	if err := s.webhooks.Dispatch(tenant.WithID(ctx, e.TenantID), domain.EventTransferFailed, payload); err != nil {
+		log.Error().Err(err).Str("transaction_id", e.TransactionID).Str("tenant_id", e.TenantID).
+			Msg("transferapproval: expired approval webhook dispatch failed")
+	}
 }
 
 // Plan returns an enabled approval policy only when a transfer meets its
@@ -53,7 +120,7 @@ func (s *Service) Plan(ctx context.Context, tenantID, asset string, amount decim
 	return policy, nil
 }
 
-func (s *Service) CreateRequest(ctx context.Context, tx *domain.Transaction, creatorID string, policy *domain.TransferApprovalPolicy) error {
+func (s *Service) CreateRequest(ctx context.Context, tx *domain.Transaction, creator domain.TransferApprovalCreator, policy *domain.TransferApprovalPolicy) error {
 	if policy == nil || tx == nil || tx.TenantID == nil {
 		return errors.New("approval request requires a tenant-scoped transaction and policy")
 	}
@@ -62,7 +129,8 @@ func (s *Service) CreateRequest(ctx context.Context, tx *domain.Transaction, cre
 		expiresAfter = 24 * time.Hour
 	}
 	request := &domain.TransferApprovalRequest{
-		ID: uuid.NewString(), TenantID: *tx.TenantID, TransactionID: tx.ID, CreatorID: creatorID,
+		ID: uuid.NewString(), TenantID: *tx.TenantID, TransactionID: tx.ID,
+		CreatorID: creator.UserID, CreatorAPIKeyID: creator.APIKeyID,
 		Asset: tx.Asset, Amount: tx.Amount, RequiredApprovals: policy.RequiredApprovals,
 		Status: "pending", ExpiresAt: s.now().Add(expiresAfter), CreatedAt: s.now(),
 	}

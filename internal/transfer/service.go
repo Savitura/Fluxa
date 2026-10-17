@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
@@ -14,6 +15,7 @@ import (
 	walletpkg "github.com/fluxa/fluxa/internal/wallet"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
 )
 
@@ -39,7 +41,7 @@ type BeneficiaryChecker interface {
 
 type ApprovalGate interface {
 	Plan(context.Context, string, string, decimal.Decimal) (*domain.TransferApprovalPolicy, error)
-	CreateRequest(context.Context, *domain.Transaction, string, *domain.TransferApprovalPolicy) error
+	CreateRequest(context.Context, *domain.Transaction, domain.TransferApprovalCreator, *domain.TransferApprovalPolicy) error
 }
 
 type AuditEntry struct {
@@ -51,6 +53,14 @@ type AuditEntry struct {
 
 type AuditLogger interface {
 	Record(ctx context.Context, entry AuditEntry) error
+}
+
+var auditWriteFailures atomic.Int64
+
+// AuditWriteFailures reports how many transfer audit entries failed to persist
+// since process start. It is exported on the API and worker metrics endpoints.
+func AuditWriteFailures() int64 {
+	return auditWriteFailures.Load()
 }
 
 type ReconcileResult struct {
@@ -487,8 +497,11 @@ func (s *service) persist(ctx context.Context, p *PreparedTransfer) (*domain.Tra
 		actor = kID
 	}
 	if approvalPolicy != nil {
-		creatorID := tenant.UserIDFromContext(ctx)
-		if err := s.approvals.CreateRequest(ctx, tx, creatorID, approvalPolicy); err != nil {
+		creator := domain.TransferApprovalCreator{
+			UserID:   tenant.UserIDFromContext(ctx),
+			APIKeyID: tenant.APIKeyIDFromContext(ctx),
+		}
+		if err := s.approvals.CreateRequest(ctx, tx, creator, approvalPolicy); err != nil {
 			_ = s.repo.UpdateStatus(ctx, tx.ID, domain.StatusFailed, "")
 			return nil, fmt.Errorf("create transfer approval request: %w", err)
 		}
@@ -693,14 +706,30 @@ func (s *service) ReconcileWallet(ctx context.Context, walletID, actor string) (
 	return result, nil
 }
 
+// recordAudit is best-effort: the action it describes has already happened, so
+// a failed audit insert must not undo it. Failures are logged at error level
+// and counted (see AuditWriteFailures) so a missing audit row is never silent.
 func (s *service) recordAudit(ctx context.Context, actor, action, resource string) {
 	if s.audit == nil {
 		return
 	}
-	_ = s.audit.Record(ctx, AuditEntry{
+	err := s.audit.Record(ctx, AuditEntry{
 		Actor:     actor,
 		Action:    action,
 		Resource:  resource,
 		Timestamp: time.Now().UTC(),
 	})
+	if err == nil {
+		return
+	}
+	auditWriteFailures.Add(1)
+	logger := zerolog.Ctx(ctx)
+	if logger.GetLevel() == zerolog.Disabled {
+		logger = &log.Logger
+	}
+	logger.Error().Err(err).
+		Str("audit_action", action).
+		Str("audit_resource", resource).
+		Str("audit_actor", actor).
+		Msg("transfer: audit log write failed")
 }

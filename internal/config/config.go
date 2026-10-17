@@ -104,6 +104,10 @@ type Config struct {
 	IndexerMetricsPort       string
 	TrustedProxyCIDRs        []netip.Prefix
 
+	// PaymentLinkCheckoutTimeout is how long a payment link may stay in
+	// processing with no payment seen before the worker releases it.
+	PaymentLinkCheckoutTimeout string
+
 	// Auth rate limiting configuration for /v1/auth/register, /v1/auth/login, /v1/org/invites/accept
 	AuthRateLimitIPRPS        float64
 	AuthRateLimitIPBurst      int
@@ -291,6 +295,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("IDEMPOTENCY_TTL_HOURS", "24")
 	viper.SetDefault("INDEXER_PAYMENTS_PAGE_LIMIT", "50")
 	viper.SetDefault("INDEXER_STREAM_MIN_BACKOFF", "1s")
+	viper.SetDefault("PAYMENT_LINK_CHECKOUT_TIMEOUT", "30m")
 	viper.SetDefault("INDEXER_STREAM_MAX_BACKOFF", "30s")
 	viper.SetDefault("INDEXER_SYNC_PAGE_SIZE", "100")
 	viper.SetDefault("INDEXER_STREAM_CONCURRENCY", 32)
@@ -435,6 +440,7 @@ func Load() (*Config, error) {
 		WebhookAllowPrivateNetworks:     webhookAllowPrivateNetworks,
 		IndexerPaymentsPageLimit:        viper.GetInt("INDEXER_PAYMENTS_PAGE_LIMIT"),
 		IndexerStreamMinBackoff:         viper.GetString("INDEXER_STREAM_MIN_BACKOFF"),
+		PaymentLinkCheckoutTimeout:      viper.GetString("PAYMENT_LINK_CHECKOUT_TIMEOUT"),
 		IndexerStreamMaxBackoff:         viper.GetString("INDEXER_STREAM_MAX_BACKOFF"),
 		IndexerSyncPageSize:             viper.GetInt("INDEXER_SYNC_PAGE_SIZE"),
 		IndexerStreamConcurrency:        viper.GetInt("INDEXER_STREAM_CONCURRENCY"),

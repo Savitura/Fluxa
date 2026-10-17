@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/fluxa/fluxa/internal/transfer"
 )
 
 type Metrics struct {
@@ -68,6 +70,9 @@ func (m *Metrics) Snapshot() map[string]interface{} {
 		"active_requests":  atomic.LoadInt64(&m.ActiveRequests),
 		"total_errors":     atomic.LoadInt64(&m.TotalErrors),
 		"requests_by_code": byCode,
+		// Transfer audit rows that failed to persist; non-zero means the audit
+		// trail has gaps that need investigating.
+		"audit_write_failures": transfer.AuditWriteFailures(),
 	}
 }
 

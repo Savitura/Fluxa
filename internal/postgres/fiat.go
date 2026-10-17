@@ -74,7 +74,10 @@ func (r *FiatRepo) UpdateDepositStatus(ctx context.Context, id, status string) e
 	} else if status == domain.FiatStatusFailed {
 		linkStatus = "failed"
 	}
-	if _, err := tx.Exec(ctx, `UPDATE payment_links SET status = $1, updated_at = NOW() WHERE id = (SELECT payment_link_id FROM fiat_deposits WHERE id = $2) AND status = 'processing'`, linkStatus, id); err != nil {
+	// A completed deposit marks its link paid even if the abandoned-checkout
+	// sweep already returned it to active (the payer paid after the timeout);
+	// other transitions only apply to a link still in processing.
+	if _, err := tx.Exec(ctx, `UPDATE payment_links SET status = $1, updated_at = NOW() WHERE id = (SELECT payment_link_id FROM fiat_deposits WHERE id = $2) AND (status = 'processing' OR ($1 = 'paid' AND status = 'active'))`, linkStatus, id); err != nil {
 		return fmt.Errorf("update payment link status: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

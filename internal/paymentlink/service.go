@@ -52,6 +52,7 @@ type Repository interface {
 	GetPublic(context.Context, string) (*Link, error)
 	Claim(context.Context, string) (*Link, error)
 	Release(context.Context, string) error
+	ReleaseStale(ctx context.Context, claimedBefore time.Time, limit int) (int, error)
 	Cancel(context.Context, string) error
 }
 
@@ -64,6 +65,13 @@ type Service struct {
 	depositor Depositor
 	now       func() time.Time
 }
+
+// releaseBatchSize bounds each ReleaseStale statement.
+const releaseBatchSize = 500
+
+// DefaultCheckoutTimeout is how long a link may sit in processing with no
+// payment seen before ReleaseAbandoned returns it to active.
+const DefaultCheckoutTimeout = 30 * time.Minute
 
 func NewService(repo Repository, depositor Depositor) *Service {
 	return &Service{repo: repo, depositor: depositor, now: func() time.Time { return time.Now().UTC() }}
@@ -206,4 +214,26 @@ func (s *Service) Checkout(ctx context.Context, token, email, name string) (*fia
 		return nil, err
 	}
 	return resp, nil
+}
+
+// ReleaseAbandoned returns links stuck in processing for longer than timeout
+// to active. Checkout only restores a link when InitiateDeposit itself fails;
+// a payer who starts a deposit and never pays would otherwise leave the link
+// unusable until it expires.
+func (s *Service) ReleaseAbandoned(ctx context.Context, timeout time.Duration) (int, error) {
+	if timeout <= 0 {
+		timeout = DefaultCheckoutTimeout
+	}
+	claimedBefore := s.now().Add(-timeout)
+	total := 0
+	for {
+		n, err := s.repo.ReleaseStale(ctx, claimedBefore, releaseBatchSize)
+		total += n
+		if err != nil {
+			return total, err
+		}
+		if n < releaseBatchSize {
+			return total, nil
+		}
+	}
 }

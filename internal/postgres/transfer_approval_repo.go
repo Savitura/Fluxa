@@ -8,6 +8,7 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 )
 
 type TransferApprovalRepo struct{ db DB }
@@ -34,7 +35,7 @@ func (r *TransferApprovalRepo) PutPolicy(ctx context.Context, p *domain.Transfer
 }
 
 func (r *TransferApprovalRepo) CreateRequest(ctx context.Context, req *domain.TransferApprovalRequest) error {
-	_, err := TxFromContext(ctx, r.db).Exec(ctx, `INSERT INTO transfer_approval_requests (id,tenant_id,transaction_id,creator_id,asset,amount,required_approvals,status,expires_at,created_at) VALUES ($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8,$9,$10)`, req.ID, req.TenantID, req.TransactionID, req.CreatorID, req.Asset, req.Amount, req.RequiredApprovals, req.Status, req.ExpiresAt, req.CreatedAt)
+	_, err := TxFromContext(ctx, r.db).Exec(ctx, `INSERT INTO transfer_approval_requests (id,tenant_id,transaction_id,creator_id,creator_api_key_id,asset,amount,required_approvals,status,expires_at,created_at) VALUES ($1,$2,$3,NULLIF($4,'')::uuid,NULLIF($5,'')::uuid,$6,$7,$8,$9,$10,$11)`, req.ID, req.TenantID, req.TransactionID, req.CreatorID, req.CreatorAPIKeyID, req.Asset, req.Amount, req.RequiredApprovals, req.Status, req.ExpiresAt, req.CreatedAt)
 	return err
 }
 
@@ -59,7 +60,7 @@ func (r *TransferApprovalRepo) ListRequests(ctx context.Context, tenantID, statu
 	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM transfer_approval_requests WHERE tenant_id=$1 AND ($2='all' OR status=$2)`, tenantID, status).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := r.db.Query(ctx, `SELECT id::text,tenant_id::text,transaction_id::text,COALESCE(creator_id::text,''),asset,amount,required_approvals,status,expires_at,created_at,decided_at,(SELECT COUNT(*) FROM transfer_approval_votes v WHERE v.request_id=r.id AND v.decision='approved') FROM transfer_approval_requests r WHERE tenant_id=$1 AND ($2='all' OR status=$2) ORDER BY created_at DESC LIMIT $3 OFFSET $4`, tenantID, status, limit, offset)
+	rows, err := r.db.Query(ctx, `SELECT id::text,tenant_id::text,transaction_id::text,COALESCE(creator_id::text,''),COALESCE(creator_api_key_id::text,''),asset,amount,required_approvals,status,expires_at,created_at,decided_at,(SELECT COUNT(*) FROM transfer_approval_votes v WHERE v.request_id=r.id AND v.decision='approved') FROM transfer_approval_requests r WHERE tenant_id=$1 AND ($2='all' OR status=$2) ORDER BY created_at DESC LIMIT $3 OFFSET $4`, tenantID, status, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -67,7 +68,7 @@ func (r *TransferApprovalRepo) ListRequests(ctx context.Context, tenantID, statu
 	var result []*domain.TransferApprovalRequest
 	for rows.Next() {
 		var q domain.TransferApprovalRequest
-		if err := rows.Scan(&q.ID, &q.TenantID, &q.TransactionID, &q.CreatorID, &q.Asset, &q.Amount, &q.RequiredApprovals, &q.Status, &q.ExpiresAt, &q.CreatedAt, &q.DecidedAt, &q.ApprovalCount); err != nil {
+		if err := rows.Scan(&q.ID, &q.TenantID, &q.TransactionID, &q.CreatorID, &q.CreatorAPIKeyID, &q.Asset, &q.Amount, &q.RequiredApprovals, &q.Status, &q.ExpiresAt, &q.CreatedAt, &q.DecidedAt, &q.ApprovalCount); err != nil {
 			return nil, 0, err
 		}
 		votes, err := r.db.Query(ctx, `SELECT id::text,actor_id::text,decision,note,created_at FROM transfer_approval_votes WHERE request_id=$1 ORDER BY created_at`, q.ID)
@@ -121,8 +122,8 @@ func (r *TransferApprovalRepo) CastVote(ctx context.Context, tenantID, requestID
 			expired = true
 			return nil
 		}
-		if decision == "approved" && required > 1 && creator == actorID {
-			return domain.ErrApprovalCreatorCannotApprove
+		if err := checkSelfApproval(creator, actorID, decision); err != nil {
+			return err
 		}
 		_, err = tx.Exec(txctx, `INSERT INTO transfer_approval_votes (request_id,tenant_id,actor_id,decision,note) VALUES ($1,$2,$3,$4,$5)`, requestID, tenantID, actorID, decision, note)
 		if err != nil {
@@ -150,7 +151,7 @@ func (r *TransferApprovalRepo) CastVote(ctx context.Context, tenantID, requestID
 				return err
 			}
 		}
-		return tx.QueryRow(txctx, `SELECT id::text,tenant_id::text,transaction_id::text,COALESCE(creator_id::text,''),asset,amount,required_approvals,status,expires_at,created_at,decided_at,(SELECT COUNT(*) FROM transfer_approval_votes v WHERE v.request_id=r.id AND v.decision='approved') FROM transfer_approval_requests r WHERE id=$1`, requestID).Scan(&out.ID, &out.TenantID, &out.TransactionID, &out.CreatorID, &out.Asset, &out.Amount, &out.RequiredApprovals, &out.Status, &out.ExpiresAt, &out.CreatedAt, &out.DecidedAt, &out.ApprovalCount)
+		return tx.QueryRow(txctx, `SELECT id::text,tenant_id::text,transaction_id::text,COALESCE(creator_id::text,''),COALESCE(creator_api_key_id::text,''),asset,amount,required_approvals,status,expires_at,created_at,decided_at,(SELECT COUNT(*) FROM transfer_approval_votes v WHERE v.request_id=r.id AND v.decision='approved') FROM transfer_approval_requests r WHERE id=$1`, requestID).Scan(&out.ID, &out.TenantID, &out.TransactionID, &out.CreatorID, &out.CreatorAPIKeyID, &out.Asset, &out.Amount, &out.RequiredApprovals, &out.Status, &out.ExpiresAt, &out.CreatedAt, &out.DecidedAt, &out.ApprovalCount)
 	})
 	if err != nil {
 		return nil, false, err
@@ -159,4 +160,61 @@ func (r *TransferApprovalRepo) CastVote(ctx context.Context, tenantID, requestID
 		return nil, false, domain.ErrApprovalExpired
 	}
 	return &out, release, nil
+}
+
+// ExpirePending expires up to limit pending requests past expires_at across all
+// tenants and fails their approval_pending transactions, in one statement so a
+// request is never expired without its transaction being failed. SKIP LOCKED
+// lets the sweep run alongside CastVote (which locks the row it decides) and
+// alongside another worker replica without blocking either. The FOR UPDATE
+// also keeps ReplicaAwareDB from routing this WITH statement to a replica.
+func (r *TransferApprovalRepo) ExpirePending(ctx context.Context, limit int) ([]domain.ExpiredTransferApproval, error) {
+	rows, err := r.db.Query(ctx, `
+		WITH due AS (
+			SELECT id FROM transfer_approval_requests
+			WHERE status = 'pending' AND expires_at <= NOW()
+			ORDER BY expires_at
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		), expired AS (
+			UPDATE transfer_approval_requests ar SET status = 'expired', decided_at = NOW()
+			FROM due WHERE ar.id = due.id
+			RETURNING ar.id, ar.tenant_id, ar.transaction_id, ar.asset, ar.amount
+		), failed AS (
+			UPDATE transactions t SET status = 'failed', failure_reason = 'approval expired'
+			FROM expired e
+			WHERE t.id = e.transaction_id AND t.tenant_id = e.tenant_id AND t.status = 'approval_pending'
+			RETURNING t.id
+		)
+		SELECT e.id::text, e.tenant_id::text, e.transaction_id::text, e.asset, e.amount::text, f.id IS NOT NULL
+		FROM expired e LEFT JOIN failed f ON f.id = e.transaction_id`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("expire pending transfer approvals: %w", err)
+	}
+	defer rows.Close()
+	var out []domain.ExpiredTransferApproval
+	for rows.Next() {
+		var e domain.ExpiredTransferApproval
+		var amount string
+		if err := rows.Scan(&e.RequestID, &e.TenantID, &e.TransactionID, &e.Asset, &amount, &e.TransactionFailed); err != nil {
+			return nil, err
+		}
+		if e.Amount, err = decimal.NewFromString(amount); err != nil {
+			return nil, fmt.Errorf("parse expired approval amount: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// checkSelfApproval enforces the four-eyes rule: the user who created a
+// transfer can never approve it, whatever the policy's required count. They
+// may still reject (cancel) it. API-key-created requests have no creator user
+// (creator_id is NULL, creator_api_key_id is set) and votes always come from
+// users, so no voter can match them.
+func checkSelfApproval(creatorUserID, actorID, decision string) error {
+	if decision == "approved" && creatorUserID != "" && creatorUserID == actorID {
+		return domain.ErrApprovalCreatorCannotApprove
+	}
+	return nil
 }

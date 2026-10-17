@@ -16,6 +16,9 @@ type linkRepoFake struct {
 	link     *Link
 	claimed  *Link
 	released bool
+
+	staleCutoffs []time.Time
+	staleResults []int
 }
 
 func (f *linkRepoFake) Create(_ context.Context, link *Link) error { f.link = link; return nil }
@@ -28,6 +31,15 @@ func (f *linkRepoFake) GetPublic(context.Context, string) (*Link, error) { retur
 func (f *linkRepoFake) Claim(context.Context, string) (*Link, error)     { return f.claimed, nil }
 func (f *linkRepoFake) Release(context.Context, string) error            { f.released = true; return nil }
 func (f *linkRepoFake) Cancel(context.Context, string) error             { return nil }
+func (f *linkRepoFake) ReleaseStale(_ context.Context, claimedBefore time.Time, _ int) (int, error) {
+	f.staleCutoffs = append(f.staleCutoffs, claimedBefore)
+	if len(f.staleResults) == 0 {
+		return 0, nil
+	}
+	n := f.staleResults[0]
+	f.staleResults = f.staleResults[1:]
+	return n, nil
+}
 
 type depositorFake struct {
 	ctx context.Context
@@ -96,5 +108,44 @@ func TestFailedCheckoutReleasesLink(t *testing.T) {
 	}
 	if !repo.released {
 		t.Fatal("expected failed checkout to attempt link release")
+	}
+}
+
+// #390: links stuck in processing after an abandoned checkout are released
+// once they have been claimed for longer than the checkout timeout.
+func TestReleaseAbandonedUsesTimeoutCutoffAndDrainsBatches(t *testing.T) {
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	repo := &linkRepoFake{staleResults: []int{releaseBatchSize, 2}}
+	svc := NewService(repo, nil)
+	svc.now = func() time.Time { return now }
+
+	released, err := svc.ReleaseAbandoned(context.Background(), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("ReleaseAbandoned: %v", err)
+	}
+	if released != releaseBatchSize+2 {
+		t.Fatalf("released = %d, want %d", released, releaseBatchSize+2)
+	}
+	if len(repo.staleCutoffs) != 2 {
+		t.Fatalf("ReleaseStale called %d times, want 2", len(repo.staleCutoffs))
+	}
+	for _, cutoff := range repo.staleCutoffs {
+		if !cutoff.Equal(now.Add(-15 * time.Minute)) {
+			t.Fatalf("cutoff = %v, want %v", cutoff, now.Add(-15*time.Minute))
+		}
+	}
+}
+
+func TestReleaseAbandonedDefaultsTimeout(t *testing.T) {
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	repo := &linkRepoFake{}
+	svc := NewService(repo, nil)
+	svc.now = func() time.Time { return now }
+
+	if _, err := svc.ReleaseAbandoned(context.Background(), 0); err != nil {
+		t.Fatalf("ReleaseAbandoned: %v", err)
+	}
+	if !repo.staleCutoffs[0].Equal(now.Add(-DefaultCheckoutTimeout)) {
+		t.Fatalf("cutoff = %v, want default timeout cutoff", repo.staleCutoffs[0])
 	}
 }
