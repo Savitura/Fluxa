@@ -35,8 +35,17 @@ type Envelope struct {
 // Encrypt encrypts plaintext using AES-256-GCM with the provided 32-byte key.
 // The returned ciphertext is a versioned envelope: v1::nonce||ciphertext (hex encoded)
 func Encrypt(plaintext, key []byte) ([]byte, error) {
+	return EncryptWithVersion(plaintext, key, CurrentVersion)
+}
+
+// EncryptWithVersion encrypts plaintext using AES-256-GCM with the provided 32-byte key
+// and writes the specified envelope version header (e.g. v2::...).
+func EncryptWithVersion(plaintext, key []byte, version int) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, ErrKeyLength
+	}
+	if version <= 0 {
+		return nil, ErrInvalidVersion
 	}
 
 	block, err := aes.NewCipher(key)
@@ -56,9 +65,9 @@ func Encrypt(plaintext, key []byte) ([]byte, error) {
 
 	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
 
-	// Build versioned envelope: v1::nonce||ciphertext
+	// Build versioned envelope: v{version}::nonce||ciphertext
 	envelope := Envelope{
-		Version:    CurrentVersion,
+		Version:    version,
 		Nonce:      nonce,
 		Ciphertext: ciphertext,
 	}
@@ -105,7 +114,7 @@ func ParseEnvelope(data []byte) (*Envelope, error) {
 		return nil, ErrVersionParse
 	}
 
-	if version != CurrentVersion {
+	if version <= 0 {
 		return nil, ErrInvalidVersion
 	}
 

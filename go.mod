@@ -1,3 +1,7 @@
+// Note on module path: Retained as github.com/fluxa/fluxa because Go module path
+// specifications (https://go.dev/ref/mod#module-path) disallow uppercase paths
+// such as github.com/Savitura/Fluxa, which cause case-encoding exclamation escaping
+// ('!savitura/!fluxa') in module caches and proxy/filesystem collisions.
 module github.com/fluxa/fluxa
 
 go 1.24.0

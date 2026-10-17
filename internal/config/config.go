@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/crypto"
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"github.com/stellar/go/keypair"
@@ -41,6 +42,9 @@ type Config struct {
 	StellarUSDCIssuer               string
 	StellarEURCIssuer               string
 	MasterEncryptionKey             []byte
+	MasterEncryptionKeyVersion      int
+	MasterEncryptionKeysRotated     string
+	Keyring                         *crypto.Keyring
 	TreasurySecretKey               string
 	PlatformFeeWalletPublicKey      string
 	ColdStorageAddress              string
@@ -52,6 +56,8 @@ type Config struct {
 	TreasuryReserveConcurrency      int
 	FlutterwaveSecretKey            string
 	FlutterwaveWebhookHash          string
+	FlutterwaveEnabled              bool
+	FlutterwaveMock                 bool
 	BalanceDiscrepancyThreshold     string
 	ReconciliationDriftThresholdUSD string
 	JWTSecret                       string
@@ -222,6 +228,21 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.FlutterwaveEnabled && c.Env != "development" && !c.FlutterwaveMock {
+		if c.FlutterwaveSecretKey == "" {
+			return fmt.Errorf("FLUTTERWAVE_SECRET_KEY is required when Flutterwave rail is enabled in %s environment", c.Env)
+		}
+		if c.FlutterwaveSecretKey == "mock" {
+			return fmt.Errorf("FLUTTERWAVE_SECRET_KEY cannot be %q in %s environment unless FLUTTERWAVE_MOCK=true", c.FlutterwaveSecretKey, c.Env)
+		}
+		if c.FlutterwaveWebhookHash == "" {
+			return fmt.Errorf("FLUTTERWAVE_WEBHOOK_HASH is required when Flutterwave rail is enabled in %s environment", c.Env)
+		}
+		if c.FlutterwaveWebhookHash == "mock" {
+			return fmt.Errorf("FLUTTERWAVE_WEBHOOK_HASH cannot be %q in %s environment unless FLUTTERWAVE_MOCK=true", c.FlutterwaveWebhookHash, c.Env)
+		}
+	}
+
 	if !c.CORSAllowedOriginsConfiguredExplicitly && c.Env != "development" && containsLocalhostWildcard(c.CORSAllowedOrigins) {
 		fmt.Fprintf(os.Stderr, "WARNING: CORS_ALLOWED_ORIGINS is still the development default (localhost:*); set it explicitly for the %q environment\n", c.Env)
 	}
@@ -308,6 +329,10 @@ func Load() (*Config, error) {
 	viper.SetDefault("AUTH_RATE_LIMIT_ACCOUNT_RPS", "1")
 	viper.SetDefault("AUTH_RATE_LIMIT_ACCOUNT_BURST", "5")
 	viper.SetDefault("TRUSTED_PROXY_CIDRS", "")
+	viper.SetDefault("FLUTTERWAVE_ENABLED", "true")
+	viper.SetDefault("FLUTTERWAVE_MOCK", "false")
+	viper.SetDefault("MASTER_ENCRYPTION_KEY_VERSION", 1)
+	viper.SetDefault("MASTER_ENCRYPTION_KEYS_ROTATED", "")
 
 	viper.SetConfigFile(".env")
 	viper.SetConfigType("env")
@@ -332,6 +357,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("MASTER_ENCRYPTION_KEY entropy check failed: %w", err)
 	}
 
+	activeVersion := viper.GetInt("MASTER_ENCRYPTION_KEY_VERSION")
+	if activeVersion <= 0 {
+		activeVersion = 1
+	}
+	retiredKeysHex := viper.GetString("MASTER_ENCRYPTION_KEYS_ROTATED")
+	keyring, err := crypto.NewKeyringFromHexStrings(activeVersion, keyHex, retiredKeysHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize encryption keyring: %w", err)
+	}
+
 	// JWT_SECRET is required in every environment — no default is provided.
 	// A missing, too-short, or well-known secret fails at boot so that staging,
 	// preview, and developer environments are subject to the same bar as
@@ -351,6 +386,8 @@ func Load() (*Config, error) {
 	complianceEnabled, _ := strconv.ParseBool(viper.GetString("COMPLIANCE_ENABLED"))
 	workerEnabled, _ := strconv.ParseBool(viper.GetString("WORKER_ENABLED"))
 	webhookAllowPrivateNetworks, _ := strconv.ParseBool(viper.GetString("WEBHOOK_ALLOW_PRIVATE_NETWORKS"))
+	flutterwaveEnabled, _ := strconv.ParseBool(viper.GetString("FLUTTERWAVE_ENABLED"))
+	flutterwaveMock, _ := strconv.ParseBool(viper.GetString("FLUTTERWAVE_MOCK"))
 
 	env := viper.GetString("ENV")
 
@@ -402,6 +439,9 @@ func Load() (*Config, error) {
 		StellarUSDCIssuer:               viper.GetString("STELLAR_USDC_ISSUER"),
 		StellarEURCIssuer:               viper.GetString("STELLAR_EURC_ISSUER"),
 		MasterEncryptionKey:             keyBytes,
+		MasterEncryptionKeyVersion:      activeVersion,
+		MasterEncryptionKeysRotated:     retiredKeysHex,
+		Keyring:                         keyring,
 		TreasurySecretKey:               viper.GetString("TREASURY_SECRET_KEY"),
 		PlatformFeeWalletPublicKey:      viper.GetString("PLATFORM_FEE_WALLET_PUBLIC_KEY"),
 		ColdStorageAddress:              viper.GetString("COLD_STORAGE_ADDRESS"),
@@ -413,6 +453,8 @@ func Load() (*Config, error) {
 		TreasuryReserveConcurrency:      viper.GetInt("TREASURY_RESERVE_CONCURRENCY"),
 		FlutterwaveSecretKey:            viper.GetString("FLUTTERWAVE_SECRET_KEY"),
 		FlutterwaveWebhookHash:          viper.GetString("FLUTTERWAVE_WEBHOOK_HASH"),
+		FlutterwaveEnabled:              flutterwaveEnabled,
+		FlutterwaveMock:                 flutterwaveMock,
 		BalanceDiscrepancyThreshold:     viper.GetString("BALANCE_DISCREPANCY_THRESHOLD"),
 		ReconciliationDriftThresholdUSD: viper.GetString("RECONCILIATION_DRIFT_THRESHOLD_USD"),
 		JWTSecret:                       jwtSecret,

@@ -269,7 +269,12 @@ func main() {
 	// the Yellow Card provider is implemented (internal/fiat/yellowcard) but
 	// not wired, because fiat.NewService takes a single Rail and there is no
 	// per-request provider selection yet.
-	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
+	fwProvider := flutterwave.NewProvider(
+		cfg.FlutterwaveSecretKey,
+		cfg.FlutterwaveWebhookHash,
+		flutterwave.WithEnv(cfg.Env),
+		flutterwave.WithMock(cfg.FlutterwaveMock),
+	)
 
 	fiatSvc := fiat.NewService(fiatRepo, fiat.NewRailAdapter(fwProvider), fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave", fiatRepo)
 	refundTransferSvc, ok := transferSvc.(refund.TransferService)

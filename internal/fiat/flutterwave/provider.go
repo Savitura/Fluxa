@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -19,15 +20,74 @@ type Provider struct {
 	webhookHash string
 	client      *http.Client
 	baseURL     string
+	env         string
+	mockMode    *bool
 }
 
-func NewProvider(secretKey, webhookHash string) *Provider {
-	return &Provider{
+// Option configures a Flutterwave Provider.
+type Option func(*Provider)
+
+// WithEnv sets the explicit environment for the provider (e.g. "development", "production").
+func WithEnv(env string) Option {
+	return func(p *Provider) {
+		p.env = env
+	}
+}
+
+// WithMock explicitly enables or disables mock mode on the provider.
+func WithMock(mock bool) Option {
+	return func(p *Provider) {
+		p.mockMode = &mock
+	}
+}
+
+// WithClient sets a custom HTTP client for the provider.
+func WithClient(client *http.Client) Option {
+	return func(p *Provider) {
+		p.client = client
+	}
+}
+
+// WithBaseURL sets a custom base URL for the provider.
+func WithBaseURL(url string) Option {
+	return func(p *Provider) {
+		p.baseURL = url
+	}
+}
+
+func NewProvider(secretKey, webhookHash string, opts ...Option) *Provider {
+	p := &Provider{
 		secretKey:   secretKey,
 		webhookHash: webhookHash,
 		client:      &http.Client{},
 		baseURL:     "https://api.flutterwave.com/v3",
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
+}
+
+// isMockAllowed returns true only when ENV=development or FLUTTERWAVE_MOCK=true.
+func (p *Provider) isMockAllowed() bool {
+	if p.mockMode != nil {
+		return *p.mockMode
+	}
+	if strings.EqualFold(os.Getenv("FLUTTERWAVE_MOCK"), "true") {
+		return true
+	}
+	if p.env != "" {
+		return p.env == "development"
+	}
+	return os.Getenv("ENV") == "development"
+}
+
+// isMock returns true if mock mode is allowed AND a mock or empty key is configured.
+func (p *Provider) isMock() bool {
+	if !p.isMockAllowed() {
+		return false
+	}
+	return p.secretKey == "mock" || p.secretKey == ""
 }
 
 func (p *Provider) Name() string {
@@ -45,7 +105,7 @@ func (p *Provider) SupportedCurrencies() []string {
 }
 
 func (p *Provider) GetQuote(ctx context.Context, req fiat.QuoteRequest) (*fiat.FiatQuote, error) {
-	if p.secretKey == "mock" || p.secretKey == "" {
+	if p.isMock() {
 		supported := false
 		for _, c := range p.SupportedCountries() {
 			if req.Country == c {
@@ -71,17 +131,29 @@ func (p *Provider) GetQuote(ctx context.Context, req fiat.QuoteRequest) (*fiat.F
 			ExpiresAt:    time.Now().Add(30 * time.Second),
 		}, nil
 	}
+	if p.secretKey == "" {
+		return nil, fmt.Errorf("flutterwave: secret key not configured")
+	}
+	if p.secretKey == "mock" {
+		return nil, fmt.Errorf("flutterwave: mock mode only permitted when ENV=development or FLUTTERWAVE_MOCK=true")
+	}
 	return nil, fmt.Errorf("flutterwave: GetQuote not yet implemented for production")
 }
 
 func (p *Provider) InitiateDeposit(ctx context.Context, req fiat.DepositRequest) (*fiat.DepositInstruction, error) {
-	if p.secretKey == "mock" || p.secretKey == "" {
+	if p.isMock() {
 		return &fiat.DepositInstruction{
 			ProviderRef: req.Reference,
 			Instructions: map[string]string{
 				"payment_link": fmt.Sprintf("https://mock.flutterwave.com/pay/%s", req.Reference),
 			},
 		}, nil
+	}
+	if p.secretKey == "" {
+		return nil, fmt.Errorf("flutterwave: secret key not configured")
+	}
+	if p.secretKey == "mock" {
+		return nil, fmt.Errorf("flutterwave: mock mode only permitted when ENV=development or FLUTTERWAVE_MOCK=true")
 	}
 
 	payload := map[string]interface{}{
@@ -129,11 +201,17 @@ func (p *Provider) InitiateDeposit(ctx context.Context, req fiat.DepositRequest)
 }
 
 func (p *Provider) InitiateWithdrawal(ctx context.Context, req fiat.WithdrawalRequest) (*fiat.WithdrawalResult, error) {
-	if p.secretKey == "mock" || p.secretKey == "" {
+	if p.isMock() {
 		return &fiat.WithdrawalResult{
 			ProviderRef: req.ProviderRef,
 			Status:      "pending",
 		}, nil
+	}
+	if p.secretKey == "" {
+		return nil, fmt.Errorf("flutterwave: secret key not configured")
+	}
+	if p.secretKey == "mock" {
+		return nil, fmt.Errorf("flutterwave: mock mode only permitted when ENV=development or FLUTTERWAVE_MOCK=true")
 	}
 
 	payload := map[string]interface{}{
@@ -179,6 +257,19 @@ func (p *Provider) InitiateWithdrawal(ctx context.Context, req fiat.WithdrawalRe
 }
 
 func (p *Provider) GetStatus(ctx context.Context, providerRef string) (*fiat.RailEvent, error) {
+	if p.isMock() {
+		return &fiat.RailEvent{
+			ProviderRef: providerRef,
+			Status:      "completed",
+		}, nil
+	}
+	if p.secretKey == "" {
+		return nil, fmt.Errorf("flutterwave: secret key not configured")
+	}
+	if p.secretKey == "mock" {
+		return nil, fmt.Errorf("flutterwave: mock mode only permitted when ENV=development or FLUTTERWAVE_MOCK=true")
+	}
+
 	httpReq, _ := http.NewRequestWithContext(ctx, "GET", p.baseURL+"/transfers/"+providerRef, nil)
 	httpReq.Header.Set("Authorization", "Bearer "+p.secretKey)
 
@@ -278,6 +369,9 @@ func (p *Provider) HandleWebhook(ctx context.Context, payload []byte, headers ht
 // of this provider (see GetQuote, InitiateDeposit, InitiateWithdrawal).
 func (p *Provider) verifyWebhookSignature(headers http.Header) error {
 	if p.webhookHash == "mock" {
+		if !p.isMockAllowed() {
+			return fmt.Errorf("flutterwave: mock webhook verification only permitted when ENV=development or FLUTTERWAVE_MOCK=true")
+		}
 		return nil
 	}
 	if p.webhookHash == "" {

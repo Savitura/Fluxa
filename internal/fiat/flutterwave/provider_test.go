@@ -3,6 +3,7 @@ package flutterwave
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/fluxa/fluxa/internal/fiat"
@@ -103,6 +104,7 @@ func TestHandleWebhook_NoSecretConfigured_FailsClosed(t *testing.T) {
 }
 
 func TestHandleWebhook_MockSecret_BypassesSignatureCheck(t *testing.T) {
+	t.Setenv("ENV", "development")
 	p := NewProvider("mock", "mock")
 	payload := chargeCompletedPayload("successful", "100")
 
@@ -321,4 +323,127 @@ func TestHandleWebhook_MalformedAmount_Rejected(t *testing.T) {
 			t.Fatalf("expected error for malformed amount %s, got nil", amount)
 		}
 	}
+}
+
+// ─── mock gating (issue #377) ────────────────────────────────────────────────
+
+func TestMockPath_OnlyRunsInDevelopmentOrExplicitMock(t *testing.T) {
+	t.Run("development environment allows mock path", func(t *testing.T) {
+		t.Setenv("ENV", "development")
+		t.Setenv("FLUTTERWAVE_MOCK", "")
+		p := NewProvider("mock", "mock")
+
+		quote, err := p.GetQuote(context.TODO(), fiat.QuoteRequest{
+			Country:      "NG",
+			FiatCurrency: "NGN",
+			FiatAmount:   decimal.NewFromInt(15000),
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if quote.Rate.Cmp(decimal.NewFromInt(1500)) != 0 {
+			t.Errorf("expected rate 1500, got %s", quote.Rate)
+		}
+
+		dep, err := p.InitiateDeposit(context.TODO(), fiat.DepositRequest{
+			Reference: "dep-123",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(dep.Instructions["payment_link"], "mock.flutterwave.com") {
+			t.Errorf("expected mock payment link, got %v", dep.Instructions)
+		}
+
+		w, err := p.InitiateWithdrawal(context.TODO(), fiat.WithdrawalRequest{
+			ProviderRef: "with-123",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if w.Status != "pending" {
+			t.Errorf("expected pending, got %s", w.Status)
+		}
+
+		st, err := p.GetStatus(context.TODO(), "tx-123")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if st.Status != "completed" {
+			t.Errorf("expected completed, got %s", st.Status)
+		}
+	})
+
+	t.Run("production environment refuses mock path when key is empty or mock", func(t *testing.T) {
+		t.Setenv("ENV", "production")
+		t.Setenv("FLUTTERWAVE_MOCK", "")
+
+		// Case 1: Empty secret key
+		pEmpty := NewProvider("", "")
+		if _, err := pEmpty.GetQuote(context.TODO(), fiat.QuoteRequest{Country: "NG"}); err == nil {
+			t.Fatal("expected error for empty key in production, got nil")
+		}
+		if _, err := pEmpty.InitiateDeposit(context.TODO(), fiat.DepositRequest{Reference: "ref"}); err == nil {
+			t.Fatal("expected error for empty key in production, got nil")
+		}
+		if _, err := pEmpty.InitiateWithdrawal(context.TODO(), fiat.WithdrawalRequest{ProviderRef: "ref"}); err == nil {
+			t.Fatal("expected error for empty key in production, got nil")
+		}
+		if _, err := pEmpty.GetStatus(context.TODO(), "ref"); err == nil {
+			t.Fatal("expected error for empty key in production, got nil")
+		}
+		if err := pEmpty.verifyWebhookSignature(headersWithSignature("")); err == nil {
+			t.Fatal("expected error for empty webhook secret in production, got nil")
+		}
+
+		// Case 2: "mock" secret key
+		pMock := NewProvider("mock", "mock")
+		if _, err := pMock.GetQuote(context.TODO(), fiat.QuoteRequest{Country: "NG"}); err == nil {
+			t.Fatal("expected error for mock key in production, got nil")
+		}
+		if _, err := pMock.InitiateDeposit(context.TODO(), fiat.DepositRequest{Reference: "ref"}); err == nil {
+			t.Fatal("expected error for mock key in production, got nil")
+		}
+		if _, err := pMock.InitiateWithdrawal(context.TODO(), fiat.WithdrawalRequest{ProviderRef: "ref"}); err == nil {
+			t.Fatal("expected error for mock key in production, got nil")
+		}
+		if _, err := pMock.GetStatus(context.TODO(), "ref"); err == nil {
+			t.Fatal("expected error for mock key in production, got nil")
+		}
+		if err := pMock.verifyWebhookSignature(headersWithSignature("mock")); err == nil {
+			t.Fatal("expected error for mock webhook secret in production, got nil")
+		}
+	})
+
+	t.Run("production environment with FLUTTERWAVE_MOCK=true allows mock path", func(t *testing.T) {
+		t.Setenv("ENV", "production")
+		t.Setenv("FLUTTERWAVE_MOCK", "true")
+		p := NewProvider("mock", "mock")
+
+		dep, err := p.InitiateDeposit(context.TODO(), fiat.DepositRequest{Reference: "ref-test"})
+		if err != nil {
+			t.Fatalf("unexpected error with FLUTTERWAVE_MOCK=true: %v", err)
+		}
+		if !strings.Contains(dep.Instructions["payment_link"], "mock.flutterwave.com") {
+			t.Errorf("expected mock payment link, got %v", dep.Instructions)
+		}
+
+		if err := p.verifyWebhookSignature(headersWithSignature("")); err != nil {
+			t.Fatalf("expected signature verification bypass with FLUTTERWAVE_MOCK=true, got %v", err)
+		}
+	})
+
+	t.Run("functional options WithEnv and WithMock override environment", func(t *testing.T) {
+		t.Setenv("ENV", "development")
+		pProd := NewProvider("mock", "mock", WithEnv("production"))
+		if _, err := pProd.GetQuote(context.TODO(), fiat.QuoteRequest{Country: "NG"}); err == nil {
+			t.Fatal("expected WithEnv(production) to disable mock mode")
+		}
+
+		t.Setenv("ENV", "production")
+		pMockOpt := NewProvider("mock", "mock", WithMock(true))
+		if _, err := pMockOpt.InitiateDeposit(context.TODO(), fiat.DepositRequest{Reference: "ref"}); err != nil {
+			t.Fatalf("expected WithMock(true) to enable mock mode, got %v", err)
+		}
+	})
 }
